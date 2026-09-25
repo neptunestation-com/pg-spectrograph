@@ -1,0 +1,15 @@
+services:
+  pg16:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: pgspec
+      POSTGRES_DB: pgspec_test
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./canary_fixture.sql:/docker-entrypoint-initdb.d/canary_fixture.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
