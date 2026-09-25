@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# pgspec runtime artifacts: never let a real capture or salt land in git
+.pgspec-salt
+spectrum*.json.gz
+spectrum-map.json
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/

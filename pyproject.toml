@@ -1,0 +1,32 @@
+[project]
+name = "pg_spectrograph"
+version = "0.1.0"
+description = "Read-only, privacy-preserving performance signature extractor for PostgreSQL"
+readme = "README.md"
+authors = [
+    { name = "David A. Ventimiglia", email = "david.ventimiglia@supabase.io" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2,<4",
+    "pglast>=8.0,<9",
+]
+
+[project.scripts]
+pgspec = "pgspec.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pgspec"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

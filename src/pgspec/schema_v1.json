@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/neptunestation-com/pg-spectrograph/schema_v1.json",
+  "title": "pgspec artifact schema v1 (placeholder)",
+  "description": "Placeholder shipped at Milestone 1 to prove packaging works. Real schema lands at Milestone 8.",
+  "type": "object",
+  "required": ["signature_version"],
+  "properties": {
+    "signature_version": {
+      "type": "string"
+    }
+  }
+}
