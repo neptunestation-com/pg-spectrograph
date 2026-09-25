@@ -30,6 +30,15 @@ CANARY_IDENTIFIERS: tuple[str, ...] = (
     "employee_name",
     "salary_dollars",
     "external_uuid",
+    "xq_customers",
+    "customer_name",
+    "signup_amount",
+    "xq_orders",
+    "customer_id",
+    "order_amount",
+    "xq_events",
+    "event_at",
+    "event_type",
 )
 
 

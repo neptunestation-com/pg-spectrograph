@@ -163,7 +163,10 @@ def mcv_skew_gini(
         lorenz_area += w_share * (cum_share + new_cum_share)
         cum_share = new_cum_share
 
-    return 1.0 - lorenz_area
+    # Clamp away floating-point noise (e.g. a uniform distribution across
+    # many groups can accumulate a tiny negative residual) -- Gini is
+    # defined on [0, 1].
+    return max(0.0, min(1.0, 1.0 - lorenz_area))
 
 
 def project_mcv_freqs(most_common_freqs: list[float] | None) -> list[float] | None:
