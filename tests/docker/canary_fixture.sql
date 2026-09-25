@@ -68,6 +68,17 @@ FROM generate_series(1, 1000) AS i;
 CREATE STATISTICS public.xq_orders_customer_amount_stats (dependencies, ndistinct)
     ON customer_id, order_amount FROM public.xq_orders;
 
+-- Milestone 5 additions: index shapes beyond plain single-column PKs.
+CREATE INDEX xq_orders_customer_amount_idx
+    ON public.xq_orders (customer_id, order_amount);
+
+CREATE INDEX xq_events_checkout_idx
+    ON public.xq_events (event_type)
+    WHERE event_type = 'canary_checkout';
+
+CREATE INDEX xq_customers_lower_name_idx
+    ON public.xq_customers (lower(customer_name));
+
 ANALYZE public.xq_customers;
 ANALYZE public.xq_orders;
 ANALYZE public.xq_events;
