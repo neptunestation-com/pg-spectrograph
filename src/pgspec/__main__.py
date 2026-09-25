@@ -89,11 +89,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_capture(args: argparse.Namespace) -> int:
-    raise NotImplementedError("pgspec capture: implemented starting Milestone 3")
+    from pgspec.capture import capture_point, write_artifact
+
+    if args.mode != "point":
+        raise NotImplementedError(
+            f"pgspec capture --mode {args.mode}: implemented starting Milestone 9"
+        )
+    if args.pgfr == "require":
+        raise NotImplementedError("pgspec capture --pgfr require: implemented at Milestone 11")
+
+    artifact = capture_point(
+        args.dsn,
+        top_k=args.top_k,
+        salt_file=args.salt_file,
+        map_path=args.map,
+    )
+    write_artifact(artifact, args.out)
+    print(f"pgspec: captured artifact written to {args.out}", file=sys.stderr)
+    print(f"pgspec: pseudonym map written to {args.map}", file=sys.stderr)
+    return 0
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    raise NotImplementedError("pgspec validate: implemented at Milestone 8")
+    from pgspec.validate import validate_artifact
+
+    errors = validate_artifact(args.artifact)
+    if errors:
+        for error in errors:
+            print(f"pgspec validate: {error}", file=sys.stderr)
+        print(f"pgspec validate: {len(errors)} problem(s) found", file=sys.stderr)
+        return 1
+    print("pgspec validate: OK", file=sys.stderr)
+    return 0
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:

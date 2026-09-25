@@ -15,7 +15,7 @@ def _capture(pg16_dsn):
     conn = connect(pg16_dsn)
     try:
         schema_result = capture_schema(conn, TEST_SALT)
-        activity = capture_activity(conn, schema_result.identifier_map, TEST_SALT)
+        activity = capture_activity(conn, schema_result.identifier_map, TEST_SALT).section
     finally:
         conn.close()
     return schema_result, activity
@@ -71,3 +71,26 @@ def test_activity_contains_no_canary_tokens(pg16_dsn):
     assert literal_hits == [], f"canary literal(s) leaked: {literal_hits}"
     identifier_hits = find_canary_tokens(activity, CANARY_IDENTIFIERS)
     assert identifier_hits == [], f"canary identifier(s) leaked: {identifier_hits}"
+
+
+def test_activity_pseudonymizes_user_function_and_returns_identifier_map(pg16_dsn):
+    conn = connect(pg16_dsn)
+    try:
+        schema_result = capture_schema(conn, TEST_SALT)
+        result = capture_activity(conn, schema_result.identifier_map, TEST_SALT)
+    finally:
+        conn.close()
+
+    # With track_functions=all, pg_stat_statements' own accessor functions
+    # (living in the public schema, same as any user function) get swept up
+    # too -- not just the fixture's own xq_calculate_bonus. Assert on the
+    # one we planted, not the total count.
+    bonus_pseudonym = result.identifier_map["public.xq_calculate_bonus"]
+    assert bonus_pseudonym.startswith("fn_")
+    bonus_entry = next(
+        f for f in result.section["user_functions"] if f["pseudonym"] == bonus_pseudonym
+    )
+    assert bonus_entry["calls"] >= 1
+    assert set(result.identifier_map.values()) == {
+        f["pseudonym"] for f in result.section["user_functions"]
+    }

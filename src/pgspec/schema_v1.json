@@ -1,13 +1,68 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/neptunestation-com/pg-spectrograph/schema_v1.json",
-  "title": "pgspec artifact schema v1 (placeholder)",
-  "description": "Placeholder shipped at Milestone 1 to prove packaging works. Real schema lands at Milestone 8.",
+  "title": "pgspec artifact schema v1",
+  "description": "Schema for the pgspec spectrum artifact (§5 of the frozen context pack).",
   "type": "object",
-  "required": ["signature_version"],
+  "required": [
+    "signature_version",
+    "captured_at",
+    "capture_mode",
+    "capture_duration_s",
+    "extractor",
+    "instance",
+    "schema",
+    "column_stats",
+    "indexes",
+    "workload",
+    "activity",
+    "derived",
+    "temporal",
+    "pseudonym_map_digest",
+    "warnings"
+  ],
   "properties": {
-    "signature_version": {
-      "type": "string"
+    "signature_version": {"type": "string"},
+    "captured_at": {"type": "string"},
+    "capture_mode": {"type": "string", "enum": ["point", "two_sample", "pgfr"]},
+    "capture_duration_s": {"type": "number"},
+    "extractor": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"}
+      }
+    },
+    "instance": {"$ref": "#/$defs/section"},
+    "schema": {"$ref": "#/$defs/section"},
+    "column_stats": {"$ref": "#/$defs/section"},
+    "indexes": {"$ref": "#/$defs/section"},
+    "workload": {"$ref": "#/$defs/section"},
+    "activity": {"$ref": "#/$defs/section"},
+    "derived": {"type": "object"},
+    "temporal": {"type": ["object", "null"]},
+    "pseudonym_map_digest": {"type": "string"},
+    "warnings": {"type": "array"}
+  },
+  "$defs": {
+    "section": {
+      "type": "object",
+      "required": ["completeness"],
+      "properties": {
+        "completeness": {"$ref": "#/$defs/completeness"}
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "required": ["available", "coverage", "staleness", "limits", "notes"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "coverage": {"type": "object"},
+        "staleness": {"type": "object"},
+        "limits": {"type": "object"},
+        "notes": {"type": "array"}
+      }
     }
   }
 }

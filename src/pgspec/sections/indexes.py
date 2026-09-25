@@ -9,6 +9,8 @@ referenced-column set is captured, never the expression or predicate itself.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import psycopg
 
 from pgspec.completeness import build_completeness
@@ -133,9 +135,15 @@ def fetch_depend_columns(conn: psycopg.Connection) -> dict[str, set[str]]:
     return result
 
 
+@dataclass
+class IndexesCapture:
+    section: dict
+    identifier_map: dict[str, str]
+
+
 def capture_indexes(
     conn: psycopg.Connection, identifier_map: dict[str, str], salt: bytes
-) -> dict:
+) -> IndexesCapture:
     """Build the indexes section (§6.4). Index pseudonyms are assigned here
     (schema.py doesn't cover them); table/column pseudonyms are reused from
     identifier_map."""
@@ -198,4 +206,4 @@ def capture_indexes(
             coverage={"indexes_captured": len(entries)},
         ),
     }
-    return section
+    return IndexesCapture(section=section, identifier_map=index_pseudonyms)

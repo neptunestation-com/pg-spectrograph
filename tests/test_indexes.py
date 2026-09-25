@@ -22,7 +22,7 @@ def _capture(pg16_dsn):
     conn = connect(pg16_dsn)
     try:
         schema_result = capture_schema(conn, TEST_SALT)
-        indexes_section = capture_indexes(conn, schema_result.identifier_map, TEST_SALT)
+        indexes_section = capture_indexes(conn, schema_result.identifier_map, TEST_SALT).section
     finally:
         conn.close()
     return schema_result, indexes_section
@@ -101,3 +101,17 @@ def test_indexes_section_contains_no_canary_tokens(pg16_dsn):
     assert literal_hits == [], f"canary literal(s) leaked: {literal_hits}"
     identifier_hits = find_canary_tokens(section, CANARY_IDENTIFIERS)
     assert identifier_hits == [], f"canary identifier(s) leaked: {identifier_hits}"
+
+
+def test_capture_indexes_returns_its_own_identifier_map(pg16_dsn):
+    conn = connect(pg16_dsn)
+    try:
+        schema_result = capture_schema(conn, TEST_SALT)
+        result = capture_indexes(conn, schema_result.identifier_map, TEST_SALT)
+    finally:
+        conn.close()
+
+    assert set(result.identifier_map.values()) == {
+        idx["pseudonym"] for idx in result.section["indexes"]
+    }
+    assert all(name.startswith("public.") for name in result.identifier_map)

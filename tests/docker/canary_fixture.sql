@@ -82,3 +82,19 @@ CREATE INDEX xq_customers_lower_name_idx
 ANALYZE public.xq_customers;
 ANALYZE public.xq_orders;
 ANALYZE public.xq_events;
+
+-- Milestone 8 addition: a user-defined function, tracked by
+-- pg_stat_user_functions once called with track_functions enabled, so
+-- activity.py's function-pseudonymization path has something real to
+-- exercise (§6.6).
+ALTER DATABASE pgspec_test SET track_functions = 'all';
+SET track_functions = 'all';
+
+CREATE FUNCTION public.xq_calculate_bonus(base numeric)
+RETURNS numeric AS $$
+BEGIN
+    RETURN base * 1.1;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT public.xq_calculate_bonus(100);

@@ -39,6 +39,7 @@ CANARY_IDENTIFIERS: tuple[str, ...] = (
     "xq_events",
     "event_at",
     "event_type",
+    "xq_calculate_bonus",
 )
 
 

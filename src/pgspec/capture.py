@@ -8,9 +8,38 @@ Every connection this module opens is read-only and bounded per I3:
 
 from __future__ import annotations
 
+import datetime as dt
+import decimal
+import math
+import time
 from dataclasses import dataclass, field
 
 import psycopg
+
+from pgspec import __version__
+from pgspec.pseudonym import PseudonymMap, load_or_create_salt, write_map_file
+
+# NOTE: the section modules are imported lazily, inside capture_point()
+# below, not here at module load time. sections/instance.py imports
+# Capabilities back from this module (it declares the capability object
+# sections are handed), so importing section modules at the top of this
+# file would be a circular import: Python would still be executing this
+# module's own top-level statements (this file) when instance.py tried to
+# import Capabilities from it. By the time capture_point() actually runs,
+# this module is already fully loaded, so the same imports succeed fine.
+
+SIGNATURE_VERSION = "1.0"
+
+#: Postgres pg_settings unit strings this module knows how to convert to
+#: bytes (only the ones relevant to memory-shaped GUCs like shared_buffers).
+_BYTE_UNIT_MULTIPLIERS = {
+    "B": 1,
+    "kB": 1024,
+    "8kB": 8192,
+    "MB": 1024**2,
+    "GB": 1024**3,
+    "TB": 1024**4,
+}
 
 
 @dataclass
@@ -82,3 +111,145 @@ def probe_capabilities(conn: psycopg.Connection) -> Capabilities:
         is_in_recovery=is_in_recovery,
         extensions=extensions,
     )
+
+
+def _pg_setting_bytes(setting: str | None, unit: str | None) -> int | None:
+    """Convert a pg_settings (setting, unit) pair to bytes, when the unit is
+    byte-shaped (used for the derived section's crude working-set bound
+    against shared_buffers). Returns None for non-byte units (e.g. "ms") or
+    an unset value."""
+    if setting is None or unit is None:
+        return None
+    multiplier = _BYTE_UNIT_MULTIPLIERS.get(unit)
+    if multiplier is None:
+        return None
+    try:
+        return int(setting) * multiplier
+    except ValueError:
+        return None
+
+
+def _normalize_for_json(obj):
+    """Recursively normalize a captured structure into pure JSON-native
+    types: round every float (and Decimal, e.g. pg_stat_statements.wal_bytes,
+    which psycopg decodes as Decimal, not float) to 6 significant digits per
+    §5's serialization rule, and stringify every datetime/date/time (e.g.
+    stats_reset, last_analyze come straight from psycopg as real datetime
+    objects, never strings) to ISO-8601 text. The function returned from
+    capture_point() is fully JSON-safe on its own; write_artifact doesn't
+    need a json.dump `default` fallback for anything this misses."""
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, (float, decimal.Decimal)):
+        value = float(obj)
+        if value == 0 or not math.isfinite(value):
+            return value
+        return float(f"{value:.6g}")
+    if isinstance(obj, (dt.datetime, dt.date, dt.time)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _normalize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_normalize_for_json(v) for v in obj]
+    return obj
+
+
+def capture_point(
+    dsn: str,
+    *,
+    top_k: int = 500,
+    salt_file: str = ".pgspec-salt",
+    map_path: str = "spectrum-map.json",
+) -> dict:
+    """Point-in-time capture (§5): all seven sections plus derived, assembled
+    into the top-level artifact shape. Two-sample and pgfr capture modes
+    build on top of this at Milestones 9 and 11.
+    """
+    from pgspec.sections.activity import capture_activity
+    from pgspec.sections.column_stats import capture_column_stats
+    from pgspec.sections.derived import compute_derived
+    from pgspec.sections.indexes import capture_indexes
+    from pgspec.sections.instance import capture_instance
+    from pgspec.sections.schema import capture_schema
+    from pgspec.sections.workload import capture_workload
+
+    start = time.monotonic()
+    salt = load_or_create_salt(salt_file)
+
+    conn = connect(dsn)
+    try:
+        capabilities = probe_capabilities(conn)
+        instance_section = capture_instance(conn, capabilities)
+        schema_result = capture_schema(conn, salt)
+        column_stats_section = capture_column_stats(conn, schema_result.identifier_map)
+        indexes_result = capture_indexes(conn, schema_result.identifier_map, salt)
+        workload_section = capture_workload(
+            conn, schema_result.identifier_map, top_k=top_k
+        )
+        activity_result = capture_activity(conn, schema_result.identifier_map, salt)
+    finally:
+        conn.close()
+
+    shared_buffers_setting = instance_section["guc_snapshot"].get("shared_buffers", {})
+    shared_buffers_bytes = _pg_setting_bytes(
+        shared_buffers_setting.get("setting"), shared_buffers_setting.get("unit")
+    )
+
+    derived_section = compute_derived(
+        schema_section=schema_result.section,
+        indexes_section=indexes_result.section,
+        workload_section=workload_section,
+        activity_section=activity_result.section,
+        shared_buffers_bytes=shared_buffers_bytes,
+    )
+
+    # Merge every section's own real-name -> pseudonym map into one, for the
+    # local-only map file (§7.5). The artifact itself only ever carries the
+    # map file's digest, never the map.
+    full_identifier_map: dict[str, str] = {
+        **schema_result.identifier_map,
+        **indexes_result.identifier_map,
+        **activity_result.identifier_map,
+    }
+    pmap = PseudonymMap(
+        salt=salt,
+        mapping={pseudonym: name for name, pseudonym in full_identifier_map.items()},
+    )
+    pseudonym_map_digest = write_map_file(pmap, map_path)
+
+    duration_s = time.monotonic() - start
+
+    artifact = {
+        "signature_version": SIGNATURE_VERSION,
+        "captured_at": dt.datetime.now(dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "capture_mode": "point",
+        "capture_duration_s": round(duration_s, 3),
+        "extractor": {"name": "pgspec", "version": __version__},
+        "instance": instance_section,
+        "schema": schema_result.section,
+        "column_stats": column_stats_section,
+        "indexes": indexes_result.section,
+        "workload": workload_section,
+        "activity": activity_result.section,
+        "derived": derived_section,
+        "temporal": None,
+        "pseudonym_map_digest": f"sha256:{pseudonym_map_digest}",
+        "warnings": [],
+    }
+    return _normalize_for_json(artifact)
+
+
+def write_artifact(artifact: dict, path: str) -> None:
+    """Serialize and gzip an artifact (§5): sorted keys, so a diff on two
+    decompressed artifacts is meaningful. Expects an already-normalized
+    artifact (i.e. capture_point()'s return value) -- no json.dump default
+    fallback here, deliberately: if this hits a non-JSON-native type, that's
+    a real bug in whatever produced the artifact, not something to paper
+    over silently."""
+    import gzip
+    import json
+
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(artifact, f, sort_keys=True, indent=2)

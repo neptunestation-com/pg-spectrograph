@@ -94,11 +94,40 @@ def test_help_smoke_test():
     assert "deref" in result.stdout
 
 
-def test_capture_not_yet_implemented():
+def test_capture_two_sample_mode_not_yet_implemented():
+    # Point mode is implemented (Milestone 8); two-sample lands at
+    # Milestone 9. No live DB needed here: the mode check runs before any
+    # connection attempt.
     result = subprocess.run(
-        [sys.executable, "-m", "pgspec", "capture", "postgresql://localhost/db"],
+        [
+            sys.executable,
+            "-m",
+            "pgspec",
+            "capture",
+            "postgresql://localhost/db",
+            "--mode",
+            "two-sample",
+        ],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 1
-    assert "Milestone 3" in result.stderr
+    assert "Milestone 9" in result.stderr
+
+
+def test_capture_pgfr_require_not_yet_implemented():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pgspec",
+            "capture",
+            "postgresql://localhost/db",
+            "--pgfr",
+            "require",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "Milestone 11" in result.stderr

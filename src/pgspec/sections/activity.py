@@ -8,6 +8,8 @@ pseudonymized before leaving this module, same as every other section.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import psycopg
 
 from pgspec.completeness import build_completeness
@@ -68,9 +70,15 @@ def _fetch_rows(conn: psycopg.Connection, sql: str) -> list[dict] | None:
         return None
 
 
+@dataclass
+class ActivityCapture:
+    section: dict
+    identifier_map: dict[str, str]
+
+
 def capture_activity(
     conn: psycopg.Connection, identifier_map: dict[str, str], salt: bytes
-) -> dict:
+) -> ActivityCapture:
     database_rows = _fetch_rows(conn, _DATABASE_SQL)
     database = database_rows[0] if database_rows else None
 
@@ -139,4 +147,4 @@ def capture_activity(
             },
         ),
     }
-    return section
+    return ActivityCapture(section=section, identifier_map=function_pseudonyms)
