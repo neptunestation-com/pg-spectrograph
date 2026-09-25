@@ -154,6 +154,24 @@ def _normalize_for_json(obj):
     return obj
 
 
+def _write_merged_pseudonym_map(
+    salt: bytes, *identifier_maps: dict[str, str], map_path: str
+) -> str:
+    """Merge every section's own real-name -> pseudonym map into one, for
+    the local-only map file (§7.5), and write it. The artifact itself only
+    ever carries the returned digest, never the map. Shared by capture_point
+    and capture_two_sample so a future fix to this merge logic can't be
+    applied to one and forgotten in the other."""
+    full_identifier_map: dict[str, str] = {}
+    for identifier_map in identifier_maps:
+        full_identifier_map.update(identifier_map)
+    pmap = PseudonymMap(
+        salt=salt,
+        mapping={pseudonym: name for name, pseudonym in full_identifier_map.items()},
+    )
+    return write_map_file(pmap, map_path)
+
+
 def capture_point(
     dsn: str,
     *,
@@ -203,19 +221,13 @@ def capture_point(
         shared_buffers_bytes=shared_buffers_bytes,
     )
 
-    # Merge every section's own real-name -> pseudonym map into one, for the
-    # local-only map file (§7.5). The artifact itself only ever carries the
-    # map file's digest, never the map.
-    full_identifier_map: dict[str, str] = {
-        **schema_result.identifier_map,
-        **indexes_result.identifier_map,
-        **activity_result.identifier_map,
-    }
-    pmap = PseudonymMap(
-        salt=salt,
-        mapping={pseudonym: name for name, pseudonym in full_identifier_map.items()},
+    pseudonym_map_digest = _write_merged_pseudonym_map(
+        salt,
+        schema_result.identifier_map,
+        indexes_result.identifier_map,
+        activity_result.identifier_map,
+        map_path=map_path,
     )
-    pseudonym_map_digest = write_map_file(pmap, map_path)
 
     duration_s = time.monotonic() - start
 
@@ -235,6 +247,145 @@ def capture_point(
         "activity": activity_result.section,
         "derived": derived_section,
         "temporal": None,
+        "pseudonym_map_digest": f"sha256:{pseudonym_map_digest}",
+        "warnings": [],
+    }
+    return _normalize_for_json(artifact)
+
+
+def capture_two_sample(
+    dsn: str,
+    *,
+    interval_s: int = 900,
+    top_k: int = 500,
+    salt_file: str = ".pgspec-salt",
+    map_path: str = "spectrum-map.json",
+) -> dict:
+    """Two-sample capture (§8): a narrow counter snapshot now (sample A: the
+    activity section plus the counter subset of indexes/workload), a full
+    point-in-time capture --interval seconds later (sample B), and
+    reset-aware per-second rates between them. Schema is captured once,
+    before sample A, and reused for both samples so pseudonym assignment
+    stays identical across the whole two-sample window.
+    """
+    from pgspec.sections.activity import capture_activity
+    from pgspec.sections.column_stats import capture_column_stats
+    from pgspec.sections.derived import compute_derived
+    from pgspec.sections.indexes import capture_indexes
+    from pgspec.sections.instance import capture_instance
+    from pgspec.sections.schema import capture_schema
+    from pgspec.sections.workload import capture_workload
+    from pgspec.two_sample import (
+        compute_activity_rates,
+        compute_indexes_rates,
+        compute_workload_rates,
+    )
+
+    start = time.monotonic()
+    salt = load_or_create_salt(salt_file)
+
+    conn = connect(dsn)
+    try:
+        schema_result = capture_schema(conn, salt)
+        sample_a_activity = capture_activity(conn, schema_result.identifier_map, salt)
+        sample_a_indexes = capture_indexes(conn, schema_result.identifier_map, salt)
+        sample_a_workload = capture_workload(
+            conn, schema_result.identifier_map, top_k=top_k
+        )
+    finally:
+        conn.close()
+    sample_a_time = dt.datetime.now(dt.timezone.utc)
+
+    time.sleep(interval_s)
+
+    conn = connect(dsn)
+    try:
+        capabilities = probe_capabilities(conn)
+        instance_section = capture_instance(conn, capabilities)
+        column_stats_section = capture_column_stats(conn, schema_result.identifier_map)
+        sample_b_indexes = capture_indexes(conn, schema_result.identifier_map, salt)
+        sample_b_workload = capture_workload(
+            conn, schema_result.identifier_map, top_k=top_k
+        )
+        sample_b_activity = capture_activity(conn, schema_result.identifier_map, salt)
+    finally:
+        conn.close()
+    sample_b_time = dt.datetime.now(dt.timezone.utc)
+
+    interval_seconds = (sample_b_time - sample_a_time).total_seconds()
+
+    activity_rates = compute_activity_rates(
+        sample_a_activity.section, sample_b_activity.section, interval_seconds
+    )
+    indexes_rates = compute_indexes_rates(
+        sample_a_indexes.section, sample_b_indexes.section, interval_seconds
+    )
+    workload_rates = compute_workload_rates(
+        sample_a_workload, sample_b_workload, interval_seconds
+    )
+
+    # §8: high eviction churn means pg_stat_statements.max is too small for
+    # this workload and coverage numbers are optimistic -- surfaced in the
+    # workload section's own completeness, not just the standalone rates.
+    workload_section = dict(sample_b_workload)
+    workload_completeness = dict(workload_section["completeness"])
+    workload_coverage = dict(workload_completeness.get("coverage", {}))
+    workload_coverage["evicted_queryids_count"] = len(workload_rates["evicted_queryids"])
+    workload_coverage["new_queryids_count"] = len(workload_rates["new_queryids"])
+    workload_completeness["coverage"] = workload_coverage
+    workload_section["completeness"] = workload_completeness
+
+    shared_buffers_setting = instance_section["guc_snapshot"].get("shared_buffers", {})
+    shared_buffers_bytes = _pg_setting_bytes(
+        shared_buffers_setting.get("setting"), shared_buffers_setting.get("unit")
+    )
+
+    # Rates feed derived preferentially over lifetime averages (§8): the
+    # rate dicts share the same key shapes as the raw sections (§two_sample
+    # module docstring), so compute_derived() consumes them as drop-in
+    # replacements with no changes needed there.
+    derived_section = compute_derived(
+        schema_section=schema_result.section,
+        indexes_section=indexes_rates,
+        workload_section=workload_rates,
+        activity_section=activity_rates,
+        shared_buffers_bytes=shared_buffers_bytes,
+    )
+
+    pseudonym_map_digest = _write_merged_pseudonym_map(
+        salt,
+        schema_result.identifier_map,
+        sample_b_indexes.identifier_map,
+        sample_b_activity.identifier_map,
+        map_path=map_path,
+    )
+
+    duration_s = time.monotonic() - start
+
+    artifact = {
+        "signature_version": SIGNATURE_VERSION,
+        "captured_at": sample_b_time.isoformat().replace("+00:00", "Z"),
+        "capture_mode": "two_sample",
+        "capture_duration_s": round(duration_s, 3),
+        "extractor": {"name": "pgspec", "version": __version__},
+        "instance": instance_section,
+        "schema": schema_result.section,
+        "column_stats": column_stats_section,
+        "indexes": sample_b_indexes.section,
+        "workload": workload_section,
+        "activity": sample_b_activity.section,
+        "derived": derived_section,
+        "temporal": None,
+        "interval": {
+            "start": sample_a_time.isoformat().replace("+00:00", "Z"),
+            "end": sample_b_time.isoformat().replace("+00:00", "Z"),
+            "seconds": round(interval_seconds, 3),
+        },
+        "rates": {
+            "activity": activity_rates,
+            "indexes": indexes_rates,
+            "workload": workload_rates,
+        },
         "pseudonym_map_digest": f"sha256:{pseudonym_map_digest}",
         "warnings": [],
     }

@@ -110,6 +110,24 @@ def test_write_map_file_permissions_and_digest(tmp_path):
     }
 
 
+def test_rewrite_query_text_update_set_target_column():
+    # UPDATE's SET-clause target column is ResTarget.name, a plain string
+    # field entirely separate from ColumnRef -- a real leak found by
+    # testing against a live two-sample capture, not a synthetic case.
+    sql = "UPDATE public.orders SET total = total WHERE customer_id = $1"
+    identifier_map = {
+        "public.orders": "t_0007",
+        "total": "c_0201",
+        "customer_id": "c_0142",
+    }
+    text, unparsed = rewrite_query_text(sql, identifier_map)
+    assert unparsed is False
+    assert "total" not in text
+    assert "customer_id" not in text
+    assert "c_0201" in text
+    assert "c_0142" in text
+
+
 def test_rewrite_query_text_simple_select():
     sql = "SELECT customer_id, total FROM public.orders WHERE customer_id = $1"
     identifier_map = {

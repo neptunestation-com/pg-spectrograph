@@ -151,6 +151,17 @@ class _IdentifierRewriter(Visitor):
             fields[-1] = pglast.ast.String(sval=self._map[name])
             node.fields = tuple(fields)
 
+    def visit_ResTarget(self, ancestors, node):
+        # An UPDATE ... SET col = expr or INSERT ... (col, ...) target
+        # column is stored as ResTarget.name, a plain string field --
+        # entirely separate from ResTarget.val (the assigned expression,
+        # itself walked and rewritten normally as any other node). Missing
+        # this handler was a real leak: "UPDATE t SET real_column = ..."
+        # left the assignment target's real name untouched even though
+        # every ColumnRef elsewhere in the same statement was pseudonymized.
+        if node.name is not None and node.name in self._map:
+            node.name = self._map[node.name]
+
     def visit_FuncCall(self, ancestors, node):
         funcname = node.funcname
         if len(funcname) != 1:
