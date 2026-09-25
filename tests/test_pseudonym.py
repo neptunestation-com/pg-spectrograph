@@ -127,6 +127,26 @@ def test_rewrite_query_text_simple_select():
     assert "c_0201" in text
 
 
+def test_rewrite_query_text_disambiguates_same_bare_column_via_qualifier():
+    sql = (
+        "SELECT o.id, c.id FROM public.orders o "
+        "JOIN public.customers c ON c.id = o.customer_id"
+    )
+    identifier_map = {
+        "public.orders": "t_0000",
+        "public.customers": "t_0001",
+        "o.id": "c_0001",
+        "c.id": "c_0002",
+        "customer_id": "c_0003",
+    }
+    text, unparsed = rewrite_query_text(sql, identifier_map)
+    assert unparsed is False
+    assert "o.id" not in text
+    assert "c.id" not in text
+    assert "c_0001" in text
+    assert "c_0002" in text
+
+
 def test_rewrite_query_text_keeps_pg_catalog_function_verbatim():
     sql = "SELECT count(*) FROM public.orders"
     identifier_map = {"public.orders": "t_0007"}

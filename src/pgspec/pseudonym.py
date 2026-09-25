@@ -127,12 +127,27 @@ class _IdentifierRewriter(Visitor):
         fields = list(node.fields)
         if not fields:
             return
-        # Only the final field is a real column name; any preceding fields
-        # are a table alias/correlation name chosen by the query author, not
-        # a catalog identifier this pseudonymizer is responsible for.
         last = fields[-1]
         name = getattr(last, "sval", None)
-        if name is not None and name in self._map:
+        if name is None:
+            return
+        # A qualified reference (alias.column) is looked up as
+        # "qualifier.column" first: the qualifier disambiguates which
+        # table's column this is when the same bare column name exists on
+        # more than one table in the query (e.g. two joined tables both
+        # having an "id" column) -- falling back to the bare name alone
+        # would silently collide and either leak the real name or guess
+        # wrong. Only when unqualified, or when no qualifier-specific entry
+        # exists, does the bare name alone apply.
+        if len(fields) >= 2:
+            qualifier = getattr(fields[-2], "sval", None)
+            if qualifier is not None:
+                qualified_key = f"{qualifier}.{name}"
+                if qualified_key in self._map:
+                    fields[-1] = pglast.ast.String(sval=self._map[qualified_key])
+                    node.fields = tuple(fields)
+                    return
+        if name in self._map:
             fields[-1] = pglast.ast.String(sval=self._map[name])
             node.fields = tuple(fields)
 
