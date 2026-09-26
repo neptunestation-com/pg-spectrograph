@@ -178,10 +178,14 @@ def capture_point(
     top_k: int = 500,
     salt_file: str = ".pgspec-salt",
     map_path: str = "spectrum-map.json",
+    pgfr: str = "auto",
 ) -> dict:
     """Point-in-time capture (§5): all seven sections plus derived, assembled
-    into the top-level artifact shape. Two-sample and pgfr capture modes
-    build on top of this at Milestones 9 and 11.
+    into the top-level artifact shape, plus optional pgfr v2 temporal
+    augmentation (§9). `pgfr`: "auto" (use it if present), "off" (never
+    probe), or "require" (fail if unavailable). Per §9, pgfr wins when
+    present: capture_mode becomes "pgfr" and the temporal section is filled
+    in alongside the normal point-in-time sections.
     """
     from pgspec.sections.activity import capture_activity
     from pgspec.sections.column_stats import capture_column_stats
@@ -189,6 +193,7 @@ def capture_point(
     from pgspec.sections.indexes import capture_indexes
     from pgspec.sections.instance import capture_instance
     from pgspec.sections.schema import capture_schema
+    from pgspec.sections.temporal_pgfr import capture_temporal_pgfr, probe_pgfr
     from pgspec.sections.workload import capture_workload
 
     start = time.monotonic()
@@ -205,6 +210,16 @@ def capture_point(
             conn, schema_result.identifier_map, top_k=top_k
         )
         activity_result = capture_activity(conn, schema_result.identifier_map, salt)
+
+        temporal_section = None
+        capture_mode = "point"
+        if pgfr != "off":
+            pgfr_status = probe_pgfr(conn, capabilities)
+            if pgfr_status["available"]:
+                temporal_section = capture_temporal_pgfr(conn, capabilities)
+                capture_mode = "pgfr"
+            elif pgfr == "require":
+                raise RuntimeError(f"pgfr required but unavailable: {pgfr_status['reason']}")
     finally:
         conn.close()
 
@@ -236,7 +251,7 @@ def capture_point(
         "captured_at": dt.datetime.now(dt.timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
-        "capture_mode": "point",
+        "capture_mode": capture_mode,
         "capture_duration_s": round(duration_s, 3),
         "extractor": {"name": "pgspec", "version": __version__},
         "instance": instance_section,
@@ -246,7 +261,7 @@ def capture_point(
         "workload": workload_section,
         "activity": activity_result.section,
         "derived": derived_section,
-        "temporal": None,
+        "temporal": temporal_section,
         "pseudonym_map_digest": f"sha256:{pseudonym_map_digest}",
         "warnings": [],
     }
@@ -260,6 +275,7 @@ def capture_two_sample(
     top_k: int = 500,
     salt_file: str = ".pgspec-salt",
     map_path: str = "spectrum-map.json",
+    pgfr: str = "auto",
 ) -> dict:
     """Two-sample capture (§8): a narrow counter snapshot now (sample A: the
     activity section plus the counter subset of indexes/workload), a full
@@ -267,7 +283,30 @@ def capture_two_sample(
     reset-aware per-second rates between them. Schema is captured once,
     before sample A, and reused for both samples so pseudonym assignment
     stays identical across the whole two-sample window.
+
+    Per §9, pgfr wins when present: if pgfr v2 is detected and `pgfr` isn't
+    "off", the whole sample-A/sleep/sample-B dance is redundant (pgfr's own
+    time series already supplies rates), so this delegates to a single
+    pgfr-augmented capture_point() call instead of sleeping at all.
     """
+    from pgspec.sections.temporal_pgfr import probe_pgfr
+
+    if pgfr != "off":
+        conn = connect(dsn)
+        try:
+            capabilities = probe_capabilities(conn)
+            pgfr_status = probe_pgfr(conn, capabilities)
+        finally:
+            conn.close()
+        if pgfr_status["available"] or pgfr == "require":
+            return capture_point(
+                dsn,
+                top_k=top_k,
+                salt_file=salt_file,
+                map_path=map_path,
+                pgfr=pgfr,
+            )
+
     from pgspec.sections.activity import capture_activity
     from pgspec.sections.column_stats import capture_column_stats
     from pgspec.sections.derived import compute_derived

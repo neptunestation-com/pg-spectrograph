@@ -91,12 +91,10 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_capture(args: argparse.Namespace) -> int:
     from pgspec.capture import capture_point, capture_two_sample, write_artifact
 
-    if args.pgfr == "require":
-        raise NotImplementedError("pgspec capture --pgfr require: implemented at Milestone 11")
-
     if args.mode == "two-sample":
         print(
-            f"pgspec: sampling now, sleeping {args.interval}s, then sampling again...",
+            f"pgspec: sampling now, sleeping {args.interval}s, then sampling again "
+            "(unless pgfr v2 is detected, in which case pgfr wins and the sleep is skipped)...",
             file=sys.stderr,
         )
         artifact = capture_two_sample(
@@ -105,6 +103,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             salt_file=args.salt_file,
             map_path=args.map,
+            pgfr=args.pgfr,
         )
     else:
         artifact = capture_point(
@@ -112,6 +111,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             salt_file=args.salt_file,
             map_path=args.map,
+            pgfr=args.pgfr,
         )
     write_artifact(artifact, args.out)
     print(f"pgspec: captured artifact written to {args.out}", file=sys.stderr)

@@ -94,19 +94,3 @@ def test_help_smoke_test():
     assert "deref" in result.stdout
 
 
-def test_capture_pgfr_require_not_yet_implemented():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pgspec",
-            "capture",
-            "postgresql://localhost/db",
-            "--pgfr",
-            "require",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 1
-    assert "Milestone 11" in result.stderr
