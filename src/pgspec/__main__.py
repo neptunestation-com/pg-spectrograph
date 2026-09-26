@@ -133,11 +133,33 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
-    raise NotImplementedError("pgspec inspect: implemented at Milestone 10")
+    from pgspec.inspect import render_inspect
+    from pgspec.validate import load_artifact
+
+    artifact = load_artifact(args.artifact)
+    print(render_inspect(artifact))
+    return 0
 
 
 def cmd_deref(args: argparse.Namespace) -> int:
-    raise NotImplementedError("pgspec deref: implemented at Milestone 10")
+    import json
+
+    from pgspec.deref import deref_artifact, load_map_file, verify_map_digest
+    from pgspec.validate import load_artifact
+
+    artifact = load_artifact(args.artifact)
+    if not verify_map_digest(args.map, artifact["pseudonym_map_digest"]):
+        print(
+            "pgspec deref: map file digest does not match this artifact's "
+            "pseudonym_map_digest -- wrong map file for this capture?",
+            file=sys.stderr,
+        )
+        return 1
+
+    pseudonym_map = load_map_file(args.map)
+    dereffed = deref_artifact(artifact, pseudonym_map)
+    print(json.dumps(dereffed, indent=2, sort_keys=True))
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

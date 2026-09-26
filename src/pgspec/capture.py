@@ -113,7 +113,7 @@ def probe_capabilities(conn: psycopg.Connection) -> Capabilities:
     )
 
 
-def _pg_setting_bytes(setting: str | None, unit: str | None) -> int | None:
+def pg_setting_bytes(setting: str | None, unit: str | None) -> int | None:
     """Convert a pg_settings (setting, unit) pair to bytes, when the unit is
     byte-shaped (used for the derived section's crude working-set bound
     against shared_buffers). Returns None for non-byte units (e.g. "ms") or
@@ -209,7 +209,7 @@ def capture_point(
         conn.close()
 
     shared_buffers_setting = instance_section["guc_snapshot"].get("shared_buffers", {})
-    shared_buffers_bytes = _pg_setting_bytes(
+    shared_buffers_bytes = pg_setting_bytes(
         shared_buffers_setting.get("setting"), shared_buffers_setting.get("unit")
     )
 
@@ -336,7 +336,7 @@ def capture_two_sample(
     workload_section["completeness"] = workload_completeness
 
     shared_buffers_setting = instance_section["guc_snapshot"].get("shared_buffers", {})
-    shared_buffers_bytes = _pg_setting_bytes(
+    shared_buffers_bytes = pg_setting_bytes(
         shared_buffers_setting.get("setting"), shared_buffers_setting.get("unit")
     )
 
