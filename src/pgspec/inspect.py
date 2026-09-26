@@ -165,7 +165,8 @@ def render_derived_summary(artifact: dict) -> str:
     lines.append("\n### FK graph")
     lines.append(
         f"- nodes={fk.get('node_count')}, edges={fk.get('edge_count')}, "
-        f"max fan-in={fk.get('max_fan_in')}, "
+        f"max fan-in={fk.get('max_fan_in')} (hub-dimension detector), "
+        f"max fan-out={fk.get('max_fan_out')} (fact-table detector), "
         f"connected components={fk.get('connected_components')}"
     )
 

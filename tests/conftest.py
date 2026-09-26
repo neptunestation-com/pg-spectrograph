@@ -82,6 +82,40 @@ def pg16_dsn() -> str:
     return _wait_ready(PG16_DSN, "pg16")
 
 
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(scope="session")
+def scenario_dsn(pg16_dsn):
+    """Factory fixture (§12's scenario databases, Milestone 12): call
+    scenario_dsn("f_skew") to get a DSN for that scenario, creating the
+    database and loading tests/fixtures/f_skew.sql on first use only. All
+    scenarios live on the pg16 container (the PG14-17 matrix is a separate
+    concern, already covered by test_version_matrix.py against the canary
+    fixture) and are left in place after the session, same as pg16_dsn
+    itself.
+    """
+
+    def _load(name: str) -> str:
+        admin_dsn = pg16_dsn.rsplit("/", 1)[0] + "/postgres"
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+                exists = cur.fetchone() is not None
+            if not exists:
+                with conn.cursor() as cur:
+                    cur.execute(f'CREATE DATABASE "{name}"')
+
+        scenario_dsn_value = pg16_dsn.rsplit("/", 1)[0] + f"/{name}"
+        if not exists:
+            sql_text = (FIXTURES_DIR / f"{name}.sql").read_text()
+            with psycopg.connect(scenario_dsn_value, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql_text)
+        return scenario_dsn_value
+
+    return _load
+
 @pytest.fixture(scope="session")
 def pg_matrix_dsns() -> dict[int, str]:
     """Bring up all four PG14-17 canary-seeded containers (Milestone 12's

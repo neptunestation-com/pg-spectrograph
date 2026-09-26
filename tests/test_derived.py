@@ -214,7 +214,24 @@ def test_fk_graph_summary_counts_and_max_fan_in():
     assert result["node_count"] == 2
     assert result["edge_count"] == 1
     assert result["max_fan_in"] == 1
+    assert result["max_fan_out"] == 1
     assert result["connected_components"] == 1
+
+
+def test_fk_graph_summary_star_schema_fan_out_detects_fact_table():
+    # One fact table referencing three dimensions: the fact table has
+    # fan_out=3 (the actual "fact-table detector"), while every dimension
+    # has fan_in=1 -- max_fan_in alone would never surface the fact table.
+    schema = {
+        "fk_graph": [
+            {"from": "t_fact", "from_cols": ["c_a"], "to": "t_dim1", "to_cols": ["c_1"]},
+            {"from": "t_fact", "from_cols": ["c_b"], "to": "t_dim2", "to_cols": ["c_2"]},
+            {"from": "t_fact", "from_cols": ["c_c"], "to": "t_dim3", "to_cols": ["c_3"]},
+        ]
+    }
+    result = fk_graph_summary(schema)
+    assert result["max_fan_out"] == 3
+    assert result["max_fan_in"] == 1
 
 
 def test_fk_graph_summary_empty_graph():

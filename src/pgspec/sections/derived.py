@@ -166,15 +166,27 @@ def statement_concentration(workload_section: dict) -> dict:
 
 
 def fk_graph_summary(schema_section: dict) -> dict:
+    """FK-graph summary (§6.7). fan_in (in-degree: distinct tables whose FK
+    points at this one) detects a shared/hub dimension referenced by
+    several other tables; fan_out (out-degree: distinct tables this one
+    references) is the actual "fact-table detector" the spec names --
+    a fact table in a star schema is characterized by many *outgoing* FKs
+    to its dimensions, not incoming ones. Both are exposed rather than
+    guessing which single direction the spec meant: a 6-dimension star
+    schema's fact table has fan_out=6 but fan_in=0 for every table, which
+    max_fan_in alone would completely miss.
+    """
     edges = schema_section.get("fk_graph") or []
     nodes: set[str] = set()
     fan_in: dict[str, int] = {}
+    fan_out: dict[str, int] = {}
     adjacency: dict[str, set[str]] = {}
     for edge in edges:
         src, dst = edge["from"], edge["to"]
         nodes.add(src)
         nodes.add(dst)
         fan_in[dst] = fan_in.get(dst, 0) + 1
+        fan_out[src] = fan_out.get(src, 0) + 1
         adjacency.setdefault(src, set()).add(dst)
         adjacency.setdefault(dst, set()).add(src)
 
@@ -191,12 +203,13 @@ def fk_graph_summary(schema_section: dict) -> dict:
                     unvisited.discard(neighbor)
                     stack.append(neighbor)
 
-    degrees = sorted(fan_in.values())
+    in_degrees = sorted(fan_in.values())
     return {
         "node_count": len(nodes),
         "edge_count": len(edges),
         "max_fan_in": max(fan_in.values()) if fan_in else 0,
-        "fan_in_median": statistics.median(degrees) if degrees else None,
+        "max_fan_out": max(fan_out.values()) if fan_out else 0,
+        "fan_in_median": statistics.median(in_degrees) if in_degrees else None,
         "connected_components": components,
     }
 
