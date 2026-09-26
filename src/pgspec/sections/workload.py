@@ -84,6 +84,10 @@ _VERB_BY_STMT_TYPE = {
     "DeleteStmt": "DELETE",
 }
 
+#: Only these verbs get their text pseudonymized and kept (§7.4); every
+#: other verb (DDL, OTHER) gets its text dropped entirely.
+_DML_VERBS = frozenset(_VERB_BY_STMT_TYPE.values())
+
 _DDL_STMT_TYPES = {
     "CreateStmt",
     "CreateTableAsStmt",
@@ -239,7 +243,24 @@ def analyze_statement(
             query_identifier_map[fq_tbl] = identifier_map[fq_tbl]
             query_identifier_map[fq_tbl.split(".", 1)[1]] = identifier_map[fq_tbl]
 
-    text, unparsed = rewrite_query_text(sql, query_identifier_map)
+    verb = _verb_class(stmt)
+    if verb in _DML_VERBS:
+        text, unparsed = rewrite_query_text(sql, query_identifier_map)
+    else:
+        # §7.4: utility statements (DDL, SET, and everything else that
+        # isn't SELECT/INSERT/UPDATE/DELETE) get their text dropped
+        # entirely, verb class only. This isn't just caution: pg_stat_
+        # statements' literal normalization only covers DML reliably, and
+        # DDL's own grammar has AST node types (ColumnDef.colname,
+        # IndexStmt.idxname, IndexElem.name, and surely others no one has
+        # hit yet) that the rewriter has no visitor for at all -- found
+        # live, by the version-matrix test, when a CREATE TABLE/CREATE
+        # INDEX from this project's own fixture setup turned up in
+        # pg_stat_statements (track_utility defaults to on) with column
+        # definitions and index names left completely unpseudonymized.
+        # Dropping the text is the safe default over trying to enumerate
+        # every DDL node type by hand.
+        text, unparsed = None, False
 
     has_limit = bool(getattr(stmt, "limitCount", None) is not None)
     has_aggregate = analyzer.has_aggregate or bool(
@@ -247,7 +268,7 @@ def analyze_statement(
     )
 
     return {
-        "verb": _verb_class(stmt),
+        "verb": verb,
         "referenced_table_pseudonyms": referenced_table_pseudonyms,
         "join_count": analyzer.join_count,
         "has_aggregate": has_aggregate,

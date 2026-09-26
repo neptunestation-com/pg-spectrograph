@@ -216,3 +216,37 @@ def test_workload_contains_no_canary_literals_or_identifiers(pg16_dsn):
     assert identifier_hits == [], (
         f"canary identifier(s) leaked into workload section: {identifier_hits}"
     )
+
+
+def test_workload_drops_ddl_text_entirely_per_74(pg16_dsn):
+    # §7.4: utility statements (DDL, here) get their text dropped entirely,
+    # verb class only -- found live by the version-matrix test, where this
+    # project's own fixture DDL (CREATE TABLE/CREATE INDEX) turned up in
+    # pg_stat_statements with column definitions and index names left
+    # completely unpseudonymized, since pg_stat_statements' literal
+    # normalization only reliably covers DML, not every DDL grammar shape.
+    _seed(
+        pg16_dsn,
+        [
+            (
+                "CREATE TEMP TABLE xq_ddl_canary_table "
+                "(id serial, xq_ddl_canary_column text)",
+                (),
+            ),
+        ],
+    )
+    conn = connect(pg16_dsn)
+    try:
+        schema_result = capture_schema(conn, TEST_SALT)
+        result = capture_workload(conn, schema_result.identifier_map, top_k=500)
+    finally:
+        conn.close()
+
+    ddl_statements = [s for s in result["statements"] if s["verb"] == "DDL"]
+    assert ddl_statements, "expected at least one DDL statement to be captured"
+    for stmt in ddl_statements:
+        assert stmt["text"] is None
+        assert stmt["unparsed"] is False
+
+    literal_hits = find_canary_tokens(result, ["xq_ddl_canary_table", "xq_ddl_canary_column"])
+    assert literal_hits == [], f"DDL identifier(s) leaked: {literal_hits}"

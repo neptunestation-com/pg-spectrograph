@@ -110,6 +110,28 @@ def test_write_map_file_permissions_and_digest(tmp_path):
     }
 
 
+def test_rewrite_query_text_create_table_column_definitions():
+    # CREATE TABLE's column definitions are ColumnDef nodes (colname, a
+    # plain string field) -- the same pattern as ResTarget.name, entirely
+    # separate from ColumnRef. Found live by the version-matrix test: this
+    # project's own fixture DDL showed up in pg_stat_statements with every
+    # column definition left as the real name even though the table name
+    # (a RangeVar) was correctly pseudonymized.
+    sql = "CREATE TABLE public.orders (id serial, total numeric)"
+    identifier_map = {
+        "public.orders": "t_0007",
+        "id": "c_0001",
+        "total": "c_0201",
+    }
+    text, unparsed = rewrite_query_text(sql, identifier_map)
+    assert unparsed is False
+    assert "orders" not in text
+    assert "total" not in text
+    assert "t_0007" in text
+    assert "c_0001" in text
+    assert "c_0201" in text
+
+
 def test_rewrite_query_text_update_set_target_column():
     # UPDATE's SET-clause target column is ResTarget.name, a plain string
     # field entirely separate from ColumnRef -- a real leak found by

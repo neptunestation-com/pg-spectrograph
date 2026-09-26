@@ -162,6 +162,17 @@ class _IdentifierRewriter(Visitor):
         if node.name is not None and node.name in self._map:
             node.name = self._map[node.name]
 
+    def visit_ColumnDef(self, ancestors, node):
+        # A CREATE TABLE column definition's name is ColumnDef.colname, a
+        # plain string field -- the exact same pattern as ResTarget.name,
+        # entirely separate from ColumnRef. Found by the version-matrix
+        # test: DDL statements (CREATE TABLE, CREATE INDEX) captured by
+        # pg_stat_statements (track_utility defaults to on) had their
+        # target table pseudonymized via RangeVar but every column
+        # definition inside the parens left as the real name.
+        if node.colname is not None and node.colname in self._map:
+            node.colname = self._map[node.colname]
+
     def visit_FuncCall(self, ancestors, node):
         funcname = node.funcname
         if len(funcname) != 1:
