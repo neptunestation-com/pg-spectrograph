@@ -12,6 +12,12 @@ CREATE TABLE writeheavy_counters (
 );
 CREATE INDEX writeheavy_counters_indexed_value_idx ON writeheavy_counters (indexed_value);
 
+-- Autovacuum would otherwise eventually clean up the dead tuples this
+-- fixture exists to demonstrate, making the scenario non-deterministic
+-- over time (confirmed live: a passing test run turned up 0 dead tuples
+-- on a later run against the same, by-then-longer-lived database).
+ALTER TABLE writeheavy_counters SET (autovacuum_enabled = false);
+
 INSERT INTO writeheavy_counters (counter_value, indexed_value)
 SELECT i, i FROM generate_series(1, 10000) i;
 

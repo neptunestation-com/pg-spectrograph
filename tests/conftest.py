@@ -108,10 +108,39 @@ def scenario_dsn(pg16_dsn):
 
         scenario_dsn_value = pg16_dsn.rsplit("/", 1)[0] + f"/{name}"
         if not exists:
-            sql_text = (FIXTURES_DIR / f"{name}.sql").read_text()
-            with psycopg.connect(scenario_dsn_value, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql_text)
+            # Loaded via psql, not psycopg's cur.execute(whole_file_text):
+            # psql dispatches each statement as its own top-level message,
+            # while a multi-statement string sent through the simple query
+            # protocol gets wrapped in one implicit transaction -- which
+            # would break f_perf_5k_tables' CALL ... with an internal
+            # COMMIT the same way a multi-statement dispatch breaks DETACH
+            # PARTITION CONCURRENTLY. Matches how the canary fixture itself
+            # is already loaded, via docker-entrypoint-initdb.d.
+            try:
+                subprocess.run(
+                    [
+                        "psql",
+                        # -X: skip ~/.psqlrc. A personal interactive-safety
+                        # default there (default_transaction_read_only=on)
+                        # is exactly right for a human at a prompt and
+                        # exactly wrong for this scripted fixture loader,
+                        # which needs real write access -- confirmed live
+                        # ("cannot execute CREATE EXTENSION in a read-only
+                        # transaction") rather than assumed.
+                        "-X",
+                        scenario_dsn_value,
+                        "-v",
+                        "ON_ERROR_STOP=1",
+                        "-f",
+                        str(FIXTURES_DIR / f"{name}.sql"),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+            except subprocess.CalledProcessError as exc:
+                pytest.fail(f"loading fixture {name!r} failed: {exc.stderr}")
         return scenario_dsn_value
 
     return _load
