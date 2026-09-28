@@ -19,11 +19,11 @@ def _column_by_pseudonym(columns: list[dict], pseudonym: str) -> dict:
     raise AssertionError(f"no column with pseudonym {pseudonym}")
 
 
-def _capture(pg16_dsn):
+def _capture(pg16_dsn, **kwargs):
     conn = connect(pg16_dsn)
     try:
         schema_result = capture_schema(conn, TEST_SALT)
-        column_stats = capture_column_stats(conn, schema_result.identifier_map)
+        column_stats = capture_column_stats(conn, schema_result.identifier_map, **kwargs)
     finally:
         conn.close()
     return schema_result, column_stats
@@ -60,6 +60,23 @@ def test_column_stats_projects_histogram_for_temporal_column(pg16_dsn):
     assert col["histogram"] is not None
     assert col["histogram"]["span"]["type_class"] == "temporal"
     assert col["histogram"]["span"]["magnitude_s"] > 0
+
+
+def test_column_stats_default_span_precision_is_raw(pg16_dsn):
+    _, column_stats = _capture(pg16_dsn)
+    assert column_stats["span_precision"] == "raw"
+
+
+def test_column_stats_paranoid_buckets_temporal_span_to_years_oom(pg16_dsn):
+    schema_result, column_stats = _capture(pg16_dsn, paranoid=True)
+    assert column_stats["span_precision"] == "paranoid"
+
+    event_at_pseudonym = schema_result.identifier_map["public.xq_events.event_at"]
+    col = _column_by_pseudonym(column_stats["columns"], event_at_pseudonym)
+    span = col["histogram"]["span"]
+    assert span["type_class"] == "temporal"
+    assert "magnitude_s" not in span
+    assert isinstance(span["magnitude_years_oom"], int)
 
 
 def test_column_stats_uses_text_width_for_text_column(pg16_dsn):

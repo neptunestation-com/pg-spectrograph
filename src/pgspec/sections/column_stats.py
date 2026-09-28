@@ -141,10 +141,15 @@ def fetch_last_analyze(conn: psycopg.Connection) -> dict[str, dict]:
 
 
 def capture_column_stats(
-    conn: psycopg.Connection, identifier_map: dict[str, str]
+    conn: psycopg.Connection,
+    identifier_map: dict[str, str],
+    *,
+    paranoid: bool = False,
 ) -> dict:
     """Build the column_stats section (§6.3) using the schema section's
-    identifier_map for pseudonym lookups."""
+    identifier_map for pseudonym lookups. `paranoid` selects the coarser
+    temporal span policy (§13.3); the policy in effect is recorded as
+    span_precision so a consumer knows which span fields to expect."""
     columns = fetch_columns(conn)
     tables = fetch_tables(conn)
     raw_stats = fetch_raw_stats(conn)
@@ -188,7 +193,7 @@ def capture_column_stats(
             "histogram_bounds"
         ]:
             bounds = [_parse_bound(b, type_class) for b in row["histogram_bounds"]]
-            histogram = normalize_histogram(bounds, type_name)
+            histogram = normalize_histogram(bounds, type_name, paranoid=paranoid)
 
         text_width = None
         if type_class is TypeClass.TEXT:
@@ -247,6 +252,7 @@ def capture_column_stats(
     section = {
         "columns": columns_out,
         "extended_stats": extended_stats_section,
+        "span_precision": "paranoid" if paranoid else "raw",
         "completeness": build_completeness(
             available=True,
             coverage={

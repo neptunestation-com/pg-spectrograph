@@ -77,37 +77,59 @@ def classify_type(type_name: str) -> TypeClass:
     return TypeClass.OTHER
 
 
-def span_descriptor(lo: float, hi: float, type_name: str) -> dict:
+_SECONDS_PER_YEAR = 365.25 * 86400
+
+
+def _order_of_magnitude(magnitude: float) -> int:
+    return math.floor(math.log10(magnitude)) if magnitude > 0 else 0
+
+
+def span_descriptor(
+    lo: float, hi: float, type_name: str, *, paranoid: bool = False
+) -> dict:
     """Magnitude-only span descriptor (§7.1): raw seconds for temporal types
     (low disclosure risk, high synthesis value); order-of-magnitude bucketed
     for numerics (extra caution -- a salary column's raw span is sensitive,
-    its OOM is not), per the §13.3 resolution."""
+    its OOM is not), per the §13.3 resolution. `paranoid` OOM-buckets
+    temporal spans too, measured in years, so captured_at minus a raw span
+    can no longer date a table's first row."""
     type_class = classify_type(type_name)
-    if type_class is TypeClass.TEMPORAL:
-        return {"type_class": "temporal", "magnitude_s": round(float(hi - lo), 6)}
     magnitude = abs(hi - lo)
-    magnitude_oom = math.floor(math.log10(magnitude)) if magnitude > 0 else 0
-    return {"type_class": "numeric", "magnitude_oom": magnitude_oom}
+    if type_class is TypeClass.TEMPORAL:
+        if paranoid:
+            return {
+                "type_class": "temporal",
+                "magnitude_years_oom": _order_of_magnitude(magnitude / _SECONDS_PER_YEAR),
+            }
+        return {"type_class": "temporal", "magnitude_s": round(float(hi - lo), 6)}
+    return {"type_class": "numeric", "magnitude_oom": _order_of_magnitude(magnitude)}
 
 
-def normalize_histogram(bounds: list[float], type_name: str) -> dict | None:
+def normalize_histogram(
+    bounds: list[float], type_name: str, *, paranoid: bool = False
+) -> dict | None:
     """Histogram bounds -> normalized quantile shape (§7.1). Affine
     normalization preserves skew, clustering, and gaps while revealing no
     endpoint. Returns None when there aren't enough bounds to describe a
     shape, or when the bounds are degenerate (no span) -- the same
     "no histogram" case column_stats.py falls back to MCV-freqs-only for.
+
+    Positions are rounded to four decimals: that is the artifact size dial
+    from the §13.4 resolution (about 27% off the gzipped size with realistic
+    101-bound histograms), and 1e-4 relative resolution is still far finer
+    than the planner's 1/100-wide histogram bins.
     """
     if len(bounds) < 2:
         return None
     lo, hi = bounds[0], bounds[-1]
     if hi == lo:
         return None
-    positions = [(b - lo) / (hi - lo) for b in bounds]
+    positions = [round((b - lo) / (hi - lo), 4) for b in bounds]
     return {
         "kind": "quantile_shape",
         "n_bounds": len(bounds),
         "positions": positions,
-        "span": span_descriptor(lo, hi, type_name),
+        "span": span_descriptor(lo, hi, type_name, paranoid=paranoid),
     }
 
 

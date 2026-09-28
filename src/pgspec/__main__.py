@@ -60,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="pg_flight_recorder augmentation mode (default: auto).",
     )
+    capture.add_argument(
+        "--paranoid",
+        action="store_true",
+        help=(
+            "Also order-of-magnitude bucket temporal histogram spans (in years) "
+            "instead of reporting raw seconds."
+        ),
+    )
     capture.set_defaults(func=cmd_capture)
 
     validate = subparsers.add_parser(
@@ -104,6 +112,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
             salt_file=args.salt_file,
             map_path=args.map,
             pgfr=args.pgfr,
+            paranoid=args.paranoid,
         )
     else:
         artifact = capture_point(
@@ -112,6 +121,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
             salt_file=args.salt_file,
             map_path=args.map,
             pgfr=args.pgfr,
+            paranoid=args.paranoid,
         )
     write_artifact(artifact, args.out)
     print(f"pgspec: captured artifact written to {args.out}", file=sys.stderr)

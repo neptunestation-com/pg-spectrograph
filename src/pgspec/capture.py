@@ -179,13 +179,15 @@ def capture_point(
     salt_file: str = ".pgspec-salt",
     map_path: str = "spectrum-map.json",
     pgfr: str = "auto",
+    paranoid: bool = False,
 ) -> dict:
     """Point-in-time capture (§5): all seven sections plus derived, assembled
     into the top-level artifact shape, plus optional pgfr v2 temporal
     augmentation (§9). `pgfr`: "auto" (use it if present), "off" (never
     probe), or "require" (fail if unavailable). Per §9, pgfr wins when
     present: capture_mode becomes "pgfr" and the temporal section is filled
-    in alongside the normal point-in-time sections.
+    in alongside the normal point-in-time sections. `paranoid` selects the
+    coarser temporal span policy in column_stats (§13.3).
     """
     from pgspec.sections.activity import capture_activity
     from pgspec.sections.column_stats import capture_column_stats
@@ -204,7 +206,9 @@ def capture_point(
         capabilities = probe_capabilities(conn)
         instance_section = capture_instance(conn, capabilities)
         schema_result = capture_schema(conn, salt)
-        column_stats_section = capture_column_stats(conn, schema_result.identifier_map)
+        column_stats_section = capture_column_stats(
+            conn, schema_result.identifier_map, paranoid=paranoid
+        )
         indexes_result = capture_indexes(conn, schema_result.identifier_map, salt)
         workload_section = capture_workload(
             conn, schema_result.identifier_map, top_k=top_k
@@ -276,6 +280,7 @@ def capture_two_sample(
     salt_file: str = ".pgspec-salt",
     map_path: str = "spectrum-map.json",
     pgfr: str = "auto",
+    paranoid: bool = False,
 ) -> dict:
     """Two-sample capture (§8): a narrow counter snapshot now (sample A: the
     activity section plus the counter subset of indexes/workload), a full
@@ -305,6 +310,7 @@ def capture_two_sample(
                 salt_file=salt_file,
                 map_path=map_path,
                 pgfr=pgfr,
+                paranoid=paranoid,
             )
 
     from pgspec.sections.activity import capture_activity
@@ -341,7 +347,9 @@ def capture_two_sample(
     try:
         capabilities = probe_capabilities(conn)
         instance_section = capture_instance(conn, capabilities)
-        column_stats_section = capture_column_stats(conn, schema_result.identifier_map)
+        column_stats_section = capture_column_stats(
+            conn, schema_result.identifier_map, paranoid=paranoid
+        )
         sample_b_indexes = capture_indexes(conn, schema_result.identifier_map, salt)
         sample_b_workload = capture_workload(
             conn, schema_result.identifier_map, top_k=top_k
@@ -433,7 +441,9 @@ def capture_two_sample(
 
 def write_artifact(artifact: dict, path: str) -> None:
     """Serialize and gzip an artifact (§5): sorted keys, so a diff on two
-    decompressed artifacts is meaningful. Expects an already-normalized
+    decompressed artifacts is meaningful, and compact separators with no
+    indentation, which is about 13% smaller gzipped (§13.4 size budget);
+    pretty-print with jq when reading. Expects an already-normalized
     artifact (i.e. capture_point()'s return value) -- no json.dump default
     fallback here, deliberately: if this hits a non-JSON-native type, that's
     a real bug in whatever produced the artifact, not something to paper
@@ -442,4 +452,4 @@ def write_artifact(artifact: dict, path: str) -> None:
     import json
 
     with gzip.open(path, "wt", encoding="utf-8") as f:
-        json.dump(artifact, f, sort_keys=True, indent=2)
+        json.dump(artifact, f, sort_keys=True, separators=(",", ":"))

@@ -19,6 +19,7 @@ def test_capture_defaults():
     assert args.map == "spectrum-map.json"
     assert args.salt_file == ".pgspec-salt"
     assert args.pgfr == "auto"
+    assert args.paranoid is False
 
 
 def test_capture_overrides():
@@ -40,6 +41,7 @@ def test_capture_overrides():
             "salt.bin",
             "--pgfr",
             "require",
+            "--paranoid",
         ]
     )
     assert args.mode == "two-sample"
@@ -49,6 +51,7 @@ def test_capture_overrides():
     assert args.map == "map.json"
     assert args.salt_file == "salt.bin"
     assert args.pgfr == "require"
+    assert args.paranoid is True
 
 
 def test_validate_requires_artifact_positional():

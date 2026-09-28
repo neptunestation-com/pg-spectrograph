@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import time
@@ -94,19 +95,28 @@ def scenario_dsn(pg16_dsn):
     concern, already covered by test_version_matrix.py against the canary
     fixture) and are left in place after the session, same as pg16_dsn
     itself.
+
+    The database name carries a short hash of the fixture file's content,
+    so editing a fixture gets a fresh database on the next run instead of
+    silently reusing the stale one; superseded databases just linger in
+    the container.
     """
 
     def _load(name: str) -> str:
+        fixture_path = FIXTURES_DIR / f"{name}.sql"
+        digest = hashlib.sha256(fixture_path.read_bytes()).hexdigest()[:8]
+        db_name = f"{name}_{digest}"
+
         admin_dsn = pg16_dsn.rsplit("/", 1)[0] + "/postgres"
         with psycopg.connect(admin_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
                 exists = cur.fetchone() is not None
             if not exists:
                 with conn.cursor() as cur:
-                    cur.execute(f'CREATE DATABASE "{name}"')
+                    cur.execute(f'CREATE DATABASE "{db_name}"')
 
-        scenario_dsn_value = pg16_dsn.rsplit("/", 1)[0] + f"/{name}"
+        scenario_dsn_value = pg16_dsn.rsplit("/", 1)[0] + f"/{db_name}"
         if not exists:
             # Loaded via psql, not psycopg's cur.execute(whole_file_text):
             # psql dispatches each statement as its own top-level message,
@@ -132,7 +142,7 @@ def scenario_dsn(pg16_dsn):
                         "-v",
                         "ON_ERROR_STOP=1",
                         "-f",
-                        str(FIXTURES_DIR / f"{name}.sql"),
+                        str(fixture_path),
                     ],
                     check=True,
                     capture_output=True,

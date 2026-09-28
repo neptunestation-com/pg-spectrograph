@@ -64,6 +64,14 @@ Two capture modes sharpen the above:
   utility statements (anything that isn't `SELECT`/`INSERT`/`UPDATE`/`DELETE`)
   have their text dropped entirely rather than risk an unpseudonymized DDL
   fragment.
+- **No histogram endpoints.** Numeric and temporal histograms are stored as
+  normalized quantile positions (0 to 1, four decimal places) plus a
+  magnitude-only span: order-of-magnitude bucketed for numerics, raw seconds
+  for temporal columns, since a synthesizer needs to know whether to
+  generate three days or three years of history. `--paranoid` buckets
+  temporal spans by order of magnitude in years as well, so a reader can no
+  longer combine `captured_at` with a span to infer when a table's history
+  began. The policy in effect is recorded as `column_stats.span_precision`.
 - **The pseudonym map never leaves your machine.** `pgspec capture` writes it
   to a separate local file (`spectrum-map.json`, mode `0600`); the artifact
   itself carries only a `sha256` digest of that file, never the mapping.
@@ -111,7 +119,7 @@ completeness metadata, never a hard failure).
 ```
 pgspec capture DSN [--mode point|two-sample] [--interval 900]
                [--top-k 500] [--out spectrum.json.gz] [--map spectrum-map.json]
-               [--salt-file .pgspec-salt] [--pgfr auto|off|require]
+               [--salt-file .pgspec-salt] [--pgfr auto|off|require] [--paranoid]
 pgspec validate spectrum.json.gz
 pgspec inspect  spectrum.json.gz
 pgspec deref    spectrum.json.gz --map spectrum-map.json
