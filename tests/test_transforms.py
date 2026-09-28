@@ -61,6 +61,53 @@ def test_span_descriptor_zero_magnitude_numeric():
     assert span_descriptor(5, 5, "int4") == {"type_class": "numeric", "magnitude_oom": 0}
 
 
+YEAR_S = 365.25 * 86400
+
+
+def test_span_descriptor_paranoid_temporal_buckets_years_oom():
+    assert span_descriptor(0, 3 * YEAR_S, "timestamptz", paranoid=True) == {
+        "type_class": "temporal",
+        "magnitude_years_oom": 0,
+    }
+    assert span_descriptor(0, 30 * YEAR_S, "date", paranoid=True)["magnitude_years_oom"] == 1
+    assert (
+        span_descriptor(0, 0.5 * YEAR_S, "timestamp", paranoid=True)["magnitude_years_oom"]
+        == -1
+    )
+    assert (
+        span_descriptor(0, 3 * 86400, "timestamptz", paranoid=True)["magnitude_years_oom"]
+        == -3
+    )
+
+
+def test_span_descriptor_paranoid_never_emits_raw_seconds():
+    assert "magnitude_s" not in span_descriptor(0, 86400, "timestamptz", paranoid=True)
+
+
+def test_span_descriptor_paranoid_leaves_numerics_unchanged():
+    assert span_descriptor(0, 187_500, "int4", paranoid=True) == {
+        "type_class": "numeric",
+        "magnitude_oom": 5,
+    }
+
+
+def test_span_descriptor_paranoid_temporal_zero_magnitude():
+    assert span_descriptor(5, 5, "timestamptz", paranoid=True) == {
+        "type_class": "temporal",
+        "magnitude_years_oom": 0,
+    }
+
+
+def test_normalize_histogram_paranoid_propagates_to_span():
+    result = normalize_histogram([0.0, 3 * YEAR_S], "timestamptz", paranoid=True)
+    assert result["span"] == {"type_class": "temporal", "magnitude_years_oom": 0}
+
+
+def test_normalize_histogram_rounds_positions_to_four_decimals():
+    result = normalize_histogram([0, 1, 3], "int4")
+    assert result["positions"] == [0.0, 0.3333, 1.0]
+
+
 def test_mcv_skew_gini_uniform_is_zero():
     assert mcv_skew_gini([0.25] * 4, 4, 4) == pytest.approx(0.0, abs=1e-9)
 

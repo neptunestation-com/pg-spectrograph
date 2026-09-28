@@ -107,3 +107,40 @@ def test_write_artifact_round_trips_and_sorts_keys(pg16_dsn, tmp_path):
     # matches alphabetical order.
     top_level_keys = list(json.loads(raw_text).keys())
     assert top_level_keys == sorted(top_level_keys)
+
+
+def test_write_artifact_is_compact(pg16_dsn, tmp_path):
+    artifact = capture_point(
+        pg16_dsn,
+        top_k=5,
+        salt_file=str(tmp_path / ".pgspec-salt"),
+        map_path=str(tmp_path / "spectrum-map.json"),
+    )
+    out_path = tmp_path / "spectrum.json.gz"
+    write_artifact(artifact, str(out_path))
+
+    with gzip.open(out_path, "rt", encoding="utf-8") as f:
+        raw_text = f.read()
+    reloaded = json.loads(raw_text)
+    assert raw_text == json.dumps(reloaded, sort_keys=True, separators=(",", ":"))
+
+
+def test_capture_point_paranoid_is_recorded_in_column_stats(pg16_dsn, tmp_path):
+    artifact = capture_point(
+        pg16_dsn,
+        top_k=5,
+        salt_file=str(tmp_path / ".pgspec-salt"),
+        map_path=str(tmp_path / "spectrum-map.json"),
+        paranoid=True,
+    )
+
+    assert artifact["column_stats"]["span_precision"] == "paranoid"
+    temporal_spans = [
+        col["histogram"]["span"]
+        for col in artifact["column_stats"]["columns"]
+        if col["histogram"] and col["histogram"]["span"]["type_class"] == "temporal"
+    ]
+    assert temporal_spans
+    for span in temporal_spans:
+        assert "magnitude_s" not in span
+        assert "magnitude_years_oom" in span

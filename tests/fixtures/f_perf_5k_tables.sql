@@ -14,8 +14,19 @@
 -- protocol wraps a whole multi-statement string in an implicit
 -- transaction, which would break CALL's internal COMMIT the same way a
 -- multi-statement dispatch breaks DETACH PARTITION CONCURRENTLY.
+--
+-- Each table gets 300 rows of random val, more than the default statistics
+-- target of 100 distinct values, so ANALYZE emits full 101-bound
+-- histograms rather than the 10-bound ones a 10-row table produces, and
+-- the histograms differ per table: identical arrays repeated across 5,000
+-- tables gzip down to almost nothing and understate the artifact size by
+-- about 5x (confirmed live with sequential val). Seeded so loads are
+-- reproducible. That is what makes the §13.4 artifact size budget
+-- assertion in test_performance.py meaningful.
 
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+SELECT setseed(0.42);
 
 CREATE PROCEDURE build_perf_tables() LANGUAGE plpgsql AS $$
 DECLARE
@@ -28,7 +39,8 @@ BEGIN
         );
         EXECUTE format(
             'INSERT INTO perf_table_%1$s (val, txt) '
-            'SELECT g, ''row_'' || g FROM generate_series(1, 10) g',
+            'SELECT (random() * 1000000)::int, ''row_'' || g '
+            'FROM generate_series(1, 300) g',
             lpad(i::text, 5, '0')
         );
         IF i % 250 = 0 THEN
