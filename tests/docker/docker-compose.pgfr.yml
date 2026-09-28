@@ -1,0 +1,29 @@
+# pgfr v2 fixture: PostgreSQL 16 built from pg_flight_recorder's own Dockerfile
+# (postgres:16 plus pg_cron and pgTAP compiled in; shared_preload_libraries and
+# cron.database_name = 'postgres' are baked into the image's config), at the
+# SHA pinned in tests/conftest.py (PGFR_SHA). conftest.py's pgfr_dsn fixture
+# shallow-clones that SHA into .pgfr-src (gitignored), which is this build
+# context, then installs pgfr_record and pgfr_analyze via psql and loads
+# tests/fixtures/f_pgfr.sql. Kept in its own compose file so the canary and
+# matrix services never depend on the clone existing.
+#
+# Rebuild from scratch: docker compose -f tests/docker/docker-compose.pgfr.yml down -v
+services:
+  pg16-pgfr:
+    build:
+      context: ./.pgfr-src
+      args:
+        PG_VERSION: 16
+    # The tag carries the pinned SHA prefix so a bumped pin cannot silently
+    # reuse a stale image. Keep in sync with PGFR_SHA in tests/conftest.py.
+    image: pgspec_pgfr_test:16-fff22cd9
+    environment:
+      POSTGRES_PASSWORD: pgspec
+      POSTGRES_DB: postgres
+    ports:
+      - "55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

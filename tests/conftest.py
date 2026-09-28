@@ -161,3 +161,137 @@ def pg_matrix_dsns() -> dict[int, str]:
     version matrix) and return {major_version: dsn}."""
     _bring_up("pg14", "pg15", "pg16", "pg17")
     return {major: _wait_ready(dsn, f"pg{major}") for major, dsn in DSNS.items()}
+
+
+PGFR_REPO_URL = "https://github.com/dventimisupabase/pg_flight_recorder.git"
+# Head of feat/pgfr-v2 on 2026-09-28 (pgfr v2 is not yet merged to its own
+# main). Keep in sync with the image tag in docker-compose.pgfr.yml.
+PGFR_SHA = "fff22cd96d18d36a63a4ad3f39f8610b668ae7c9"
+PGFR_SRC_DIR = DOCKER_DIR / ".pgfr-src"
+PGFR_COMPOSE = DOCKER_DIR / "docker-compose.pgfr.yml"
+PGFR_DSN = "postgresql://postgres:pgspec@localhost:55433/postgres"
+
+
+def _ensure_pgfr_checkout() -> None:
+    """Shallow-fetch pgfr at the pinned SHA into a gitignored cache dir. The
+    checkout serves both the compose build context (pgfr's own Dockerfile,
+    postgres:16 plus pg_cron) and the psql-driven install (install.sql uses
+    \\ir includes, so it needs real files on disk). Reused as-is when its
+    HEAD already matches the pin."""
+    git = ["git", "-C", str(PGFR_SRC_DIR)]
+    try:
+        if not (PGFR_SRC_DIR / ".git").exists():
+            PGFR_SRC_DIR.mkdir(parents=True, exist_ok=True)
+            subprocess.run([*git, "init", "-q"], check=True, capture_output=True, timeout=30)
+            subprocess.run(
+                [*git, "remote", "add", "origin", PGFR_REPO_URL],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+        head = subprocess.run(
+            [*git, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30
+        )
+        if head.returncode == 0 and head.stdout.strip() == PGFR_SHA:
+            return
+        subprocess.run(
+            [*git, "fetch", "-q", "--depth", "1", "origin", PGFR_SHA],
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+        subprocess.run(
+            [*git, "checkout", "-q", "--detach", "FETCH_HEAD"],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        pytest.skip(f"pgfr checkout at {PGFR_SHA[:8]} unavailable: {exc}")
+
+
+def _bring_up_pgfr() -> None:
+    docker = _docker_bin()
+    try:
+        subprocess.run(
+            [docker, "compose", "-f", str(PGFR_COMPOSE), "up", "-d", "--wait", "pg16-pgfr"],
+            check=True,
+            capture_output=True,
+            text=True,
+            # First run builds pgfr's image, compiling pg_cron and pgTAP.
+            timeout=900,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        pytest.skip(f"pgfr container unavailable: {exc}")
+
+
+def _psql(dsn: str, *args: str) -> None:
+    subprocess.run(
+        ["psql", "-X", "-v", "ON_ERROR_STOP=1", dsn, *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+
+@pytest.fixture(scope="session")
+def pgfr_dsn() -> str:
+    """A PG16 container built from pgfr's own Dockerfile (pg_cron preloaded),
+    with pgfr_record and pgfr_analyze installed at the pinned SHA and the
+    synthesized 7-day history from tests/fixtures/f_pgfr.sql loaded once
+    (§14: "a synthesized 7-day history with a scripted weekday batch
+    spike"). Left running like the other containers; rebuild with
+    `docker compose -f tests/docker/docker-compose.pgfr.yml down -v`.
+    """
+    _ensure_pgfr_checkout()
+    _bring_up_pgfr()
+
+    deadline = time.monotonic() + 60
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with psycopg.connect(PGFR_DSN, connect_timeout=2, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+            break
+        except Exception as exc:  # noqa: BLE001 - broad while polling readiness
+            last_error = exc
+            time.sleep(1)
+    else:
+        pytest.skip(f"pgfr container never became ready: {last_error}")
+
+    with psycopg.connect(PGFR_DSN, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_cron")
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+        cur.execute("SELECT to_regclass('pgfr_record.manifest') IS NOT NULL")
+        installed = cur.fetchone()[0]
+    if not installed:
+        try:
+            _psql(
+                PGFR_DSN,
+                "--single-transaction",
+                "-f",
+                str(PGFR_SRC_DIR / "pgfr_record" / "install.sql"),
+            )
+            _psql(
+                PGFR_DSN,
+                "--single-transaction",
+                "-f",
+                str(PGFR_SRC_DIR / "pgfr_analyze" / "install.sql"),
+            )
+        except subprocess.CalledProcessError as exc:
+            pytest.fail(f"installing pgfr failed: {exc.stderr}")
+
+    with psycopg.connect(PGFR_DSN, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM pgfr_record.a_pg_stat_wal "
+            "WHERE captured_at < now() - interval '5 days'"
+        )
+        history_loaded = cur.fetchone()[0] > 0
+    if not history_loaded:
+        try:
+            _psql(PGFR_DSN, "-f", str(FIXTURES_DIR / "f_pgfr.sql"))
+        except subprocess.CalledProcessError as exc:
+            pytest.fail(f"loading f_pgfr history failed: {exc.stderr}")
+    return PGFR_DSN

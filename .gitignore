@@ -20,6 +20,9 @@ venv/
 spectrum*.json.gz
 spectrum-map.json
 
+# pg_flight_recorder checkout the pgfr test fixture shallow-clones at a pinned SHA
+tests/docker/.pgfr-src/
+
 # Editor/OS
 .DS_Store
 .vscode/

@@ -45,9 +45,15 @@ Two capture modes sharpen the above:
   between the two samples.
 - **pgfr** (`--pgfr auto`, the default) detects an installed and actively
   capturing [pg_flight_recorder v2](https://github.com/dventimisupabase/pg_flight_recorder)
-  and, if present, adds a `temporal` section (a WAL-byte-rate time series and
-  batch/spike detection) and skips the two-sample sleep entirely, since pgfr's
-  own history already supplies rates. `--pgfr off` never probes for it;
+  and, if present, adds a `temporal` section built from pgfr's own history:
+  for each of four cluster-wide rates (`wal_bytes_rate`, `tps`,
+  `blks_read_rate`, `temp_bytes_rate`), hourly quantiles, a 24x7
+  day-of-week by hour-of-day profile, and a trend slope; batch/spike events
+  with an inferred cadence (`weekdays`, `daily`, `weekly`, ...), UTC phase
+  hour, duration, and magnitude over a robust baseline; and window
+  completeness taken straight from `pgfr_analyze.coverage()` and
+  `coverage_gaps()`. It also skips the two-sample sleep entirely, since
+  pgfr's history already supplies rates. `--pgfr off` never probes for it;
   `--pgfr require` fails the capture if it isn't available.
 
 ## What is provably not captured
@@ -136,3 +142,9 @@ Integration tests need Docker (a PG14-17 matrix, seeded with a canary
 fixture whose distinctive literal values and identifier names are checked to
 never appear anywhere in a captured artifact) and are skipped cleanly if
 Docker is unavailable. See `tests/docker/` and `tests/fixtures/`.
+
+The pgfr tests additionally shallow-clone pg_flight_recorder at a pinned SHA
+into `tests/docker/.pgfr-src` and build a PG16 image from its own Dockerfile
+(pg_cron compiled in; several minutes the first time), then install pgfr and
+load a synthesized 7-day history. They skip cleanly when Docker, git, or the
+network is unavailable.

@@ -9,6 +9,7 @@ from pgspec.inspect import (
     render_extended_stats_headline,
     render_inspect,
     render_instance_highlights,
+    render_temporal_summary,
 )
 
 
@@ -86,6 +87,66 @@ def _artifact(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def _temporal():
+    return {
+        "available": True,
+        "window": {
+            "start": "2026-09-21T10:00:00+00:00",
+            "end": "2026-09-28T09:00:00+00:00",
+            "bucket_seconds": 3600,
+            "source": "pgfr_v2",
+            "completeness_fraction": 0.988,
+            "capture_ledger_gaps": 1,
+            "coverage_by_tier": {"fast": 0.988, "medium": 0.0},
+        },
+        "metrics": {
+            "wal_bytes_rate": {
+                "bucket_count": 168,
+                "quantiles": {"p50": 100000.0, "p95": 110000.0, "p99": 650000.0, "max": 660000.0},
+                "seasonal_24x7": [[None] * 24 for _ in range(7)],
+                "trend_slope_per_day": 12.5,
+                "source_view": "pg_stat_wal",
+            }
+        },
+        "statement_mixture": "unavailable_in_v1",
+        "events": [
+            {
+                "kind": "batch_spike",
+                "metric": "wal_bytes_rate",
+                "cadence": "weekdays",
+                "phase_hour_utc": 13,
+                "occurrences": 5,
+                "duration_buckets": 1,
+                "duration_s": 3600,
+                "magnitude_x_baseline": 6.5,
+                "first_seen": "2026-09-21T13:00:00+00:00",
+                "last_seen": "2026-09-25T13:00:00+00:00",
+                "evidence": ["wal_bytes_rate"],
+            }
+        ],
+        "maintenance": "unavailable_in_v1",
+        "completeness": _ok_completeness(),
+    }
+
+
+def test_render_temporal_summary_is_absent_without_pgfr():
+    assert render_temporal_summary(_artifact()) is None
+    assert "Temporal signature" not in render_inspect(_artifact())
+
+
+def test_render_temporal_summary_states_coverage_before_events():
+    text = render_temporal_summary(_artifact(temporal=_temporal()))
+    assert "completeness (fast tier): 98.8%" in text
+    assert "ledger gaps: 1" in text
+    assert text.index("completeness (fast tier)") < text.index("wal_bytes_rate") < text.index(
+        "weekdays"
+    )
+
+    report = render_inspect(_artifact(temporal=_temporal(), capture_mode="pgfr"))
+    assert "## Temporal signature (pgfr v2)" in report
+    assert report.index("## Coverage") < report.index("## Temporal signature (pgfr v2)")
 
 
 def test_render_coverage_table_lists_all_sections():

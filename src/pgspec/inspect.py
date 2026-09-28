@@ -194,6 +194,47 @@ def render_derived_summary(artifact: dict) -> str:
     return "\n".join(lines)
 
 
+def render_temporal_summary(artifact: dict) -> str | None:
+    """The pgfr-backed temporal section, when present: window coverage
+    first, then per-metric quantiles, then detected events, so a reader
+    sees how much of the week is actually filled in before reading the
+    cadence claims made over it."""
+    temporal = artifact.get("temporal")
+    if not isinstance(temporal, dict) or not temporal.get("available"):
+        return None
+
+    window = temporal.get("window") or {}
+    lines = [
+        f"- window: {window.get('start')} to {window.get('end')} "
+        f"(bucket {window.get('bucket_seconds')}s, source {window.get('source')})",
+        f"- completeness (fast tier): {_pct(window.get('completeness_fraction'))}, "
+        f"ledger gaps: {window.get('capture_ledger_gaps')}",
+    ]
+    for metric, summary in sorted((temporal.get("metrics") or {}).items()):
+        quantiles = summary.get("quantiles") or {}
+        lines.append(
+            f"- {metric}: p50={_fmt(quantiles.get('p50'))} p95={_fmt(quantiles.get('p95'))} "
+            f"p99={_fmt(quantiles.get('p99'))} max={_fmt(quantiles.get('max'))} "
+            f"over {summary.get('bucket_count')} buckets, "
+            f"trend {_fmt(summary.get('trend_slope_per_day'))}/day"
+        )
+
+    events = temporal.get("events") or []
+    if not events:
+        lines.append("- no batch/spike events detected")
+        return "\n".join(lines)
+    lines.append("")
+    lines.append("| Metric | Cadence | Phase (UTC hour) | Occurrences | Duration | x baseline |")
+    lines.append("|---|---|---|---|---|---|")
+    for event in events:
+        lines.append(
+            f"| {event.get('metric')} | {event.get('cadence')} | {event.get('phase_hour_utc')} "
+            f"| {event.get('occurrences')} | {event.get('duration_s')}s "
+            f"| {_fmt(event.get('magnitude_x_baseline'), 3)} |"
+        )
+    return "\n".join(lines)
+
+
 def render_inspect(artifact: dict) -> str:
     lines = [
         "# pgspec spectral summary",
@@ -219,4 +260,7 @@ def render_inspect(artifact: dict) -> str:
         render_derived_summary(artifact),
         "",
     ]
+    temporal = render_temporal_summary(artifact)
+    if temporal is not None:
+        lines += ["## Temporal signature (pgfr v2)", "", temporal, ""]
     return "\n".join(lines)
