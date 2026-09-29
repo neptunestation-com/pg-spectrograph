@@ -165,6 +165,31 @@ def statement_concentration(workload_section: dict) -> dict:
     }
 
 
+def statement_recurrence(workload_section: dict, workload_coverage: dict | None = None) -> dict:
+    """Statement recurrence (issue #2 finding 4, Redset): how concentrated
+    calls are across statements, the unit-free analog of "80% of queries
+    are repeats", so it reads the same in point mode (lifetime calls) and
+    two-sample mode (call rates). Meant to be read against
+    cache_hit_ratios: Redset's observation is that heavy repetition and low
+    cache locality coexist under invalidation churn. dealloc_count and the
+    two-sample eviction churn qualify the number, since a pg_stat_statements
+    that keeps evicting entries understates recurrence.
+    """
+    statements = workload_section.get("statements") or []
+    coverage = workload_coverage or {}
+    evicted = coverage.get("evicted_queryids_count")
+    captured = coverage.get("statements_captured")
+    churn = None
+    if evicted is not None and captured:
+        # Share of the union of both samples' statements seen only in the first.
+        churn = evicted / (captured + evicted)
+    return {
+        "calls": _shannon_entropy_and_shares([s.get("calls") or 0 for s in statements]),
+        "dealloc_count": coverage.get("dealloc_count"),
+        "eviction_churn_fraction": churn,
+    }
+
+
 def fk_graph_summary(schema_section: dict) -> dict:
     """FK-graph summary (§6.7). fan_in (in-degree: distinct tables whose FK
     points at this one) detects a shared/hub dimension referenced by
@@ -275,11 +300,14 @@ def compute_derived(
     workload_section: dict,
     activity_section: dict,
     shared_buffers_bytes: int | None = None,
+    workload_coverage: dict | None = None,
 ) -> dict:
     """Assemble the full derived section (§6.7) from already-captured
     sections. No database access; every value here is a pure function of
     its inputs, per the spec's "each value carries the names of its
-    inputs" instruction (encoded as this function's own parameter list)."""
+    inputs" instruction (encoded as this function's own parameter list).
+    `workload_coverage` is the workload section's completeness coverage
+    dict, which in two-sample mode also carries the eviction-churn counts."""
     return {
         "read_write_ratio": read_write_ratio(activity_section, workload_section),
         "hot_update_fraction": hot_update_fraction(activity_section),
@@ -289,6 +317,7 @@ def compute_derived(
         "cache_hit_ratios": cache_hit_ratios(activity_section),
         "working_set_bound": working_set_bound(schema_section, shared_buffers_bytes),
         "statement_concentration": statement_concentration(workload_section),
+        "statement_recurrence": statement_recurrence(workload_section, workload_coverage),
         "fk_graph_summary": fk_graph_summary(schema_section),
         "table_size_distribution": table_size_distribution(schema_section),
         "dead_tuple_pressure": dead_tuple_pressure(activity_section),

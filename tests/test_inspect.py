@@ -68,6 +68,11 @@ def _artifact(**overrides):
                 "exec_time": {"entropy_bits": 2.5, "top1_share": 0.4, "top10_share": 0.9},
                 "blks_read": {"entropy_bits": 1.5, "top1_share": 0.7, "top10_share": 0.95},
             },
+            "statement_recurrence": {
+                "calls": {"entropy_bits": 0.8, "top1_share": 0.8, "top10_share": 1.0},
+                "dealloc_count": 12,
+                "eviction_churn_fraction": None,
+            },
             "fk_graph_summary": {
                 "node_count": 3,
                 "edge_count": 2,
@@ -129,6 +134,14 @@ def _temporal():
         "maintenance": "unavailable_in_v1",
         "completeness": _ok_completeness(),
     }
+
+
+def test_render_derived_summary_reads_recurrence_against_cache_locality():
+    text = render_derived_summary(_artifact())
+    assert "### Statement recurrence" in text
+    assert "by calls" in text and "top1=80.0%" in text
+    assert "deallocations: 12" in text
+    assert text.index("### Cache hit ratio") < text.index("### Statement recurrence")
 
 
 def test_render_temporal_summary_is_absent_without_pgfr():
