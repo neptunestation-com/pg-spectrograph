@@ -103,14 +103,17 @@ def write_map_file(pmap: PseudonymMap, path: str | Path) -> str:
 
 
 class _IdentifierRewriter(Visitor):
-    """Walks a parsed statement, rewriting relation, column, and user-defined
-    function identifiers through identifier_map. pg_catalog / builtin
-    functions (anything not present in identifier_map) pass through verbatim,
-    per §7.4."""
+    """Walks a parsed statement, rewriting relation and column identifiers
+    through identifier_map and function names through function_map (keyed
+    "schema.function", plus bare names where unambiguous). pg_catalog and
+    any function absent from function_map pass through verbatim, per §7.4:
+    the caller builds function_map from every user-schema function in
+    pg_proc, so anything not in it is a builtin."""
 
-    def __init__(self, identifier_map: dict[str, str]):
+    def __init__(self, identifier_map: dict[str, str], function_map: dict[str, str] | None = None):
         super().__init__()
         self._map = identifier_map
+        self._functions = function_map or {}
 
     def visit_RangeVar(self, ancestors, node):
         if node.schemaname:
@@ -174,16 +177,28 @@ class _IdentifierRewriter(Visitor):
             node.colname = self._map[node.colname]
 
     def visit_FuncCall(self, ancestors, node):
-        funcname = node.funcname
-        if len(funcname) != 1:
+        # A schema-qualified call (public.calculate_bonus(...)) was a real
+        # leak: the earlier single-part-only handling returned early on it.
+        # Found by the canary version matrix the moment the tail-sample lens
+        # started capturing statements the top-K lenses never reached.
+        parts = [getattr(part, "sval", None) for part in node.funcname]
+        if not parts or any(part is None for part in parts):
             return
-        name = funcname[0].sval
-        if name in self._map:
-            node.funcname = (pglast.ast.String(sval=self._map[name]),)
+        if len(parts) >= 2:
+            schema, name = parts[-2], parts[-1]
+            if schema == "pg_catalog":
+                return
+            pseudonym = self._functions.get(f"{schema}.{name}")
+        else:
+            pseudonym = self._functions.get(parts[0])
+            if pseudonym is None:
+                pseudonym = self._map.get(parts[0])
+        if pseudonym is not None:
+            node.funcname = (pglast.ast.String(sval=pseudonym),)
 
 
 def rewrite_query_text(
-    sql: str, identifier_map: dict[str, str]
+    sql: str, identifier_map: dict[str, str], function_map: dict[str, str] | None = None
 ) -> tuple[str | None, bool]:
     """Pseudonymize a normalized (pg_stat_statements-style) query text.
 
@@ -196,5 +211,5 @@ def rewrite_query_text(
         tree = pglast.parse_sql(sql)
     except pglast.parser.ParseError:
         return None, True
-    _IdentifierRewriter(identifier_map)(tree)
+    _IdentifierRewriter(identifier_map, function_map)(tree)
     return RawStream()(tree), False

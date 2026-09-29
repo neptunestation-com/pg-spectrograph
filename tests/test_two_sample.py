@@ -132,3 +132,29 @@ def test_compute_workload_rates_detects_eviction_churn():
     assert rates["new_queryids"] == ["3"]
     by_queryid = {r["queryid"]: r for r in rates["statements"]}
     assert by_queryid[2]["calls"] == pytest.approx(1.0)
+
+
+def test_compute_workload_rates_leaves_structural_fields_unrated():
+    # join_count, max_param, rows_per_call, output_selectivity, and the
+    # predicates list describe the statement, not a counter; rating them
+    # would turn a 2-way join into 0.0 joins per second.
+    statement = {
+        "queryid": 7,
+        "calls": 10,
+        "join_count": 2,
+        "max_param": 3,
+        "rows_per_call": 4.0,
+        "output_selectivity": 0.002,
+        "predicates": [{"column": "c_0001", "op": "=", "parameterized": True}],
+        "sampled_tail": False,
+    }
+    later = dict(statement, calls=20)
+    rates = compute_workload_rates({"statements": [statement]}, {"statements": [later]}, 10.0)
+    rated = rates["statements"][0]
+    assert rated["calls"] == pytest.approx(1.0)
+    assert rated["join_count"] == 2
+    assert rated["max_param"] == 3
+    assert rated["rows_per_call"] == 4.0
+    assert rated["output_selectivity"] == 0.002
+    assert rated["predicates"] == statement["predicates"]
+    assert rated["sampled_tail"] is False

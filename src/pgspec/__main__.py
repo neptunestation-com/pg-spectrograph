@@ -68,6 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
             "instead of reporting raw seconds."
         ),
     )
+    capture.add_argument(
+        "--tail-sample",
+        type=int,
+        default=50,
+        help=(
+            "Statements sampled uniformly from outside the top-K union so the tail "
+            "is represented, marked sampled_tail (default: 50; 0 disables; point "
+            "mode only)."
+        ),
+    )
     capture.set_defaults(func=cmd_capture)
 
     validate = subparsers.add_parser(
@@ -122,6 +132,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
             map_path=args.map,
             pgfr=args.pgfr,
             paranoid=args.paranoid,
+            tail_sample=args.tail_sample,
         )
     write_artifact(artifact, args.out)
     print(f"pgspec: captured artifact written to {args.out}", file=sys.stderr)

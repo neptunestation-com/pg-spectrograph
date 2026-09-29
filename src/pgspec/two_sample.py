@@ -61,11 +61,19 @@ def _row_key(row: dict, key: str | Callable[[dict], object]):
     return key(row) if callable(key) else row[key]
 
 
+#: Numeric statement fields that describe the statement rather than count
+#: anything: rating them would turn a 2-way join into 0.0 joins per second.
+_STATEMENT_STRUCTURAL_FIELDS = frozenset(
+    {"join_count", "max_param", "rows_per_call", "output_selectivity"}
+)
+
+
 def rate_list_by_key(
     a_list: list[dict] | None,
     b_list: list[dict] | None,
     key: str | Callable[[dict], object],
     interval_s: float,
+    extra_exclude: frozenset[str] = frozenset(),
 ) -> tuple[list[dict], list[str], list[str]]:
     """Match rows between two samples by `key` (a field name, or a callable
     computing a composite key e.g. for pg_stat_io's backend_type/object/
@@ -82,7 +90,7 @@ def rate_list_by_key(
     # A plain field-name key must never itself be rated (see rate_dict's
     # docstring); a callable (composite) key is always built from label-
     # shaped fields in practice, so there's nothing to exclude there.
-    exclude = frozenset({key}) if isinstance(key, str) else frozenset()
+    exclude = (frozenset({key}) if isinstance(key, str) else frozenset()) | extra_exclude
 
     rated_rows = []
     for k, b_row in b_by_key.items():
@@ -154,6 +162,7 @@ def compute_workload_rates(sample_a: dict, sample_b: dict, interval_s: float) ->
         sample_b.get("statements"),
         key="queryid",
         interval_s=interval_s,
+        extra_exclude=_STATEMENT_STRUCTURAL_FIELDS,
     )
     return {
         "statements": rated,
