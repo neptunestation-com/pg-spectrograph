@@ -15,9 +15,15 @@ from pgspec.capture import Capabilities, connect
 from pgspec.sections.temporal_pgfr import (
     bucket_rates,
     capture_temporal_pgfr,
+    checkpoint_interval_summary,
     detect_batch_events,
+    locf_bucket_deltas,
+    mean_active_series,
+    mixture_summary,
     probe_pgfr,
+    quantile_summary,
     rate_summary,
+    rollup_column_definitions,
 )
 
 UTC = dt.timezone.utc
@@ -165,6 +171,119 @@ def test_rate_summary_handles_empty_and_single_bucket():
     assert single["trend_slope_per_day"] is None
 
 
+def test_quantile_summary_shape():
+    assert quantile_summary([]) is None
+    assert quantile_summary([4.0]) == {"p50": 4.0, "p95": 4.0, "p99": 4.0, "max": 4.0, "n": 1}
+    summary = quantile_summary([1.0, 2.0, 3.0, 4.0])
+    assert summary["n"] == 4
+    assert summary["max"] == 4.0
+    assert summary["p50"] == pytest.approx(2.5)
+
+
+def test_rollup_column_definitions_keys_then_counter_deltas_then_buckets():
+    columns = [
+        ("relid", "oid", False),
+        ("schemaname", "name", False),
+        ("seq_scan", "bigint", True),
+        ("n_live_tup", "bigint", False),
+        ("autovacuum_count", "bigint", True),
+        ("last_vacuum", "timestamp with time zone", False),
+    ]
+    assert rollup_column_definitions(["relid"], columns) == [
+        "relid oid",
+        "seq_scan_delta bigint",
+        "autovacuum_count_delta bigint",
+        "from_bucket timestamptz",
+        "to_bucket timestamptz",
+    ]
+
+
+def test_rollup_column_definitions_rejects_unsafe_catalog_text():
+    with pytest.raises(ValueError):
+        rollup_column_definitions(["relid"], [("relid", "oid; DROP TABLE x", False)])
+    with pytest.raises(ValueError):
+        rollup_column_definitions(["re lid"], [("re lid", "oid", False)])
+
+
+def _hours(start: dt.datetime, n: int) -> list[dt.datetime]:
+    return [start + dt.timedelta(hours=i) for i in range(n)]
+
+
+def test_locf_bucket_deltas_carries_forward_and_skips_resets():
+    grid = _hours(dt.datetime(2026, 1, 5, tzinfo=UTC), 5)
+    rows = [
+        ("q1", grid[0], 100.0),
+        ("q1", grid[1], 150.0),
+        ("q1", grid[3], 250.0),
+        ("q2", grid[2], 10.0),
+        ("q2", grid[3], 4.0),
+        ("q2", grid[4], 9.0),
+    ]
+    deltas = locf_bucket_deltas(rows, grid)
+    # First observation has no prior to diff against; a missing bucket
+    # carries the last value forward (pgfr's debounce: no row means no
+    # change); a decrease is a reset and contributes nothing.
+    assert deltas["q1"] == [0.0, 50.0, 0.0, 100.0, 0.0]
+    assert deltas["q2"] == [0.0, 0.0, 0.0, 0.0, 5.0]
+
+
+def test_mixture_summary_shares_drift_and_churn():
+    monday = dt.datetime(2026, 1, 5, tzinfo=UTC)
+    grid = _hours(monday, 24 * 14)
+    week = 24 * 7
+    per_queryid = {
+        1: [100.0] * len(grid),
+        2: [100.0] * week + [0.0] * week,
+        3: [0.0] * week + [100.0] * week,
+    }
+    summary = mixture_summary(per_queryid, grid, bucket_seconds=3600)
+
+    assert summary["bucket_starts"][0] == monday.isoformat()
+    assert [s["queryid"] for s in summary["series"]][0] == 1
+    first = {s["queryid"]: s["shares"][0] for s in summary["series"]}
+    last = {s["queryid"]: s["shares"][-1] for s in summary["series"]}
+    assert first == {1: 0.5, 2: 0.5, 3: 0.0}
+    assert last == {1: 0.5, 2: 0.0, 3: 0.5}
+    # One transition bucket with L1 distance 1.0 across 335 transitions.
+    assert summary["share_drift_mean_l1"] == pytest.approx(1.0 / (len(grid) - 1))
+    # Active sets {1,2} then {1,3}: one day boundary with Jaccard distance 2/3.
+    assert summary["set_churn_day_over_day"] == pytest.approx((2 / 3) / 13)
+    assert summary["churn_week_over_week"] == pytest.approx(2 / 3)
+
+
+def test_mixture_summary_week_over_week_needs_two_weeks():
+    grid = _hours(dt.datetime(2026, 1, 5, tzinfo=UTC), 24 * 7)
+    summary = mixture_summary({1: [10.0] * len(grid)}, grid, bucket_seconds=3600)
+    assert summary["churn_week_over_week"] is None
+    assert summary["share_drift_mean_l1"] == 0.0
+
+
+def test_checkpoint_interval_summary_inverts_rates_and_skips_idle_hours():
+    base = dt.datetime(2026, 1, 5, tzinfo=UTC)
+    buckets = [
+        (base, 12 / 3600),
+        (base + dt.timedelta(hours=1), 6 / 3600),
+        (base + dt.timedelta(hours=2), 0.0),
+    ]
+    summary = checkpoint_interval_summary(buckets, timed_total=15, total=18)
+    assert summary["interval_s"]["n"] == 2
+    assert summary["interval_s"]["max"] == pytest.approx(600.0)
+    assert summary["interval_s"]["p50"] == pytest.approx(450.0)
+    assert summary["timed_fraction"] == pytest.approx(15 / 18)
+
+
+def test_mean_active_series_divides_by_ticks_and_reports_sampling():
+    b0 = dt.datetime(2026, 1, 5, 9, tzinfo=UTC)
+    b1 = b0 + dt.timedelta(hours=1)
+    b2 = b1 + dt.timedelta(hours=1)
+    rows = [(b0, 84.0, 438), (b1, 120.0, 600), (b2, 50.0, 300)]
+    series, sampling = mean_active_series(rows, {b0: 60, b1: 60})
+    assert series == [(b0, pytest.approx(1.4)), (b1, pytest.approx(2.0))]
+    assert sampling["regime"] == "mode_a_sampled"
+    assert sampling["interval_s"] == pytest.approx(60.0)
+    assert sampling["samples_per_bucket_median"] == 60
+
+
 def test_probe_pgfr_reports_unavailable_when_not_installed(pg16_dsn):
     conn = connect(pg16_dsn)
     try:
@@ -197,7 +316,9 @@ def test_capture_temporal_pgfr_fails_soft_when_absent(pg16_dsn):
 
     assert section["available"] is False
     assert section["completeness"]["available"] is False
-    assert section["statement_mixture"] == "unavailable_in_v1"
+    assert section["statement_mixture"] is None
+    assert section["maintenance"] is None
+    assert section["metrics"] == {}
     assert section["events"] == []
 
 

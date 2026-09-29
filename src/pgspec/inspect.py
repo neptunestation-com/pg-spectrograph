@@ -226,11 +226,45 @@ def render_temporal_summary(artifact: dict) -> str | None:
     ]
     for metric, summary in sorted((temporal.get("metrics") or {}).items()):
         quantiles = summary.get("quantiles") or {}
+        sampling = summary.get("sampling")
+        sampled = f", sampled every {_fmt(sampling.get('interval_s'))}s" if sampling else ""
+        buckets = summary.get("bucket_count", summary.get("tables_observed"))
         lines.append(
             f"- {metric}: p50={_fmt(quantiles.get('p50'))} p95={_fmt(quantiles.get('p95'))} "
             f"p99={_fmt(quantiles.get('p99'))} max={_fmt(quantiles.get('max'))} "
-            f"over {summary.get('bucket_count')} buckets, "
-            f"trend {_fmt(summary.get('trend_slope_per_day'))}/day"
+            f"over {buckets} {'tables' if 'tables_observed' in summary else 'buckets'}"
+            f"{sampled}"
+            + (f", trend {_fmt(summary.get('trend_slope_per_day'))}/day" if "trend_slope_per_day" in summary else "")
+        )
+
+    mixture = temporal.get("statement_mixture")
+    if isinstance(mixture, dict):
+        lines.append(
+            f"- statement mixture: {mixture.get('statements_considered')} statements "
+            f"(top {mixture.get('top_n')} by calls) over {mixture.get('window_days')} days at "
+            f"{mixture.get('share_timeseries_bucket_seconds')}s buckets; share drift (mean L1) "
+            f"{_fmt(mixture.get('share_drift_mean_l1'))}, day-over-day set churn "
+            f"{_pct(mixture.get('set_churn_day_over_day'))}, week-over-week "
+            f"{_pct(mixture.get('churn_week_over_week'))}"
+        )
+
+    maintenance = temporal.get("maintenance")
+    if isinstance(maintenance, dict):
+        autovacuum = maintenance.get("autovacuum_events_per_day_by_table_quantiles") or {}
+        checkpoints = maintenance.get("checkpoint_interval_quantiles") or {}
+        interval = checkpoints.get("interval_s") or {}
+        sawtooth = maintenance.get("dead_tuple_sawtooth_amplitude_quantiles") or {}
+        lines.append(
+            f"- autovacuum events/day per table: p50={_fmt(autovacuum.get('p50'))} "
+            f"max={_fmt(autovacuum.get('max'))} over {autovacuum.get('n')} tables"
+        )
+        lines.append(
+            f"- checkpoint interval: p50={_fmt(interval.get('p50'))}s p95={_fmt(interval.get('p95'))}s, "
+            f"timed fraction {_pct(checkpoints.get('timed_fraction'))}"
+        )
+        lines.append(
+            f"- dead-tuple sawtooth amplitude (share of live peak): p50={_pct(sawtooth.get('p50'))} "
+            f"max={_pct(sawtooth.get('max'))} over {sawtooth.get('n')} tables"
         )
 
     events = temporal.get("events") or []

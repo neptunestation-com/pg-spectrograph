@@ -39,3 +39,17 @@ def test_no_section_sql_constant_references_most_common_vals():
                 if token in sql:
                     offenders.append((path.name, name, token))
     assert offenders == []
+
+
+def test_temporal_sql_never_selects_raw_query_text():
+    # pgfr stores pg_stat_statements' raw query text indefinitely (issue #3
+    # finding 7). The temporal section reads that view for queryids and
+    # counters only; the bare `query` column must never appear in its SQL.
+    # `queryid` is fine: the word boundary excludes it.
+    import re
+
+    offenders = []
+    for name, sql in _sql_constants(SECTIONS_DIR / "temporal_pgfr.py").items():
+        if re.search(r"\bquery\b", sql):
+            offenders.append(name)
+    assert offenders == []

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from pgspec.capture import (
     capture_point,
     capture_two_sample,
@@ -22,10 +24,10 @@ from pgspec.sections.temporal_pgfr import capture_temporal_pgfr, probe_pgfr
 from pgspec.validate import validate_artifact
 
 
-def _temporal(pgfr_dsn: str) -> dict:
+def _temporal(pgfr_dsn: str, **kwargs) -> dict:
     conn = connect(pgfr_dsn)
     try:
-        return capture_temporal_pgfr(conn, probe_capabilities(conn))
+        return capture_temporal_pgfr(conn, probe_capabilities(conn), **kwargs)
     finally:
         conn.close()
 
@@ -137,6 +139,87 @@ def test_capture_point_with_pgfr_present_is_pgfr_mode_and_validates(pgfr_dsn, tm
     assert "## Temporal signature (pgfr v2)" in report
     # Coverage before conclusions (issue #3 finding 10).
     assert report.index("completeness (fast tier)") < report.index("weekdays")
+
+
+def test_group_b_dead_tup_growth_comes_from_rollup_deltas(pgfr_dsn):
+    # f_pgfr synthesizes 12 user tables whose (n_tup_upd + n_tup_del) per
+    # hour is 150 * i, i = 1..12, so per-second rates span 0.04 to 0.5.
+    # pg_cron's own tables (cron.job, cron.job_run_details) are real,
+    # lightly active user-schema tables in this database and may join them
+    # once their daily bucket closes, exactly as they would in the schema
+    # section, so the count is bounded rather than exact.
+    temporal = _temporal(pgfr_dsn)
+    growth = temporal["metrics"]["dead_tup_growth"]
+    assert growth["source"] == "rollup_deltas(pg_catalog.pg_stat_all_tables)"
+    assert 12 <= growth["tables_observed"] <= 14
+    assert growth["quantiles"]["n"] == growth["tables_observed"]
+    assert 0.03 <= growth["quantiles"]["p50"] <= 0.45
+    assert 0.4 <= growth["quantiles"]["max"] <= 0.6
+
+
+def test_maintenance_rhythm_quantiles(pgfr_dsn):
+    temporal = _temporal(pgfr_dsn)
+    maintenance = temporal["maintenance"]
+
+    # Table i autovacuums every (6 + i) hours: 3.4/day down to 1.3/day.
+    # (pg_cron's tables may add one or two real entries; see the Group B
+    # test above.)
+    autovacuum = maintenance["autovacuum_events_per_day_by_table_quantiles"]
+    assert 12 <= autovacuum["n"] <= 14
+    assert 1.0 <= autovacuum["p50"] <= 3.5
+
+    # One timed checkpoint per 5-minute sample, plus requested ones during
+    # the weekday batch, so the typical spacing is 300 s and the timed share
+    # is high but below 1.
+    checkpoints = maintenance["checkpoint_interval_quantiles"]
+    assert 280 <= checkpoints["interval_s"]["p50"] <= 320
+    assert 0.9 <= checkpoints["timed_fraction"] < 1.0
+
+    # n_dead_tup climbs and drops each autovacuum cycle; amplitude relative
+    # to the live-tuple peak is a percent or two.
+    sawtooth = maintenance["dead_tuple_sawtooth_amplitude_quantiles"]
+    assert 12 <= sawtooth["n"] <= 14
+    assert 0.005 <= sawtooth["p50"] <= 0.1
+
+
+def test_statement_mixture_is_queryid_only_with_measured_churn(pgfr_dsn):
+    # 25 synthetic statements over 14 days; five stop and five start exactly
+    # one week in, so the week-over-week top-set churn is 10 / 25 = 0.4.
+    # Restricting top_n to the synthetic count keeps pgfr's own collector
+    # statements (real captures since install) out of the set.
+    temporal = _temporal(pgfr_dsn, mixture_top_n=25)
+    mixture = temporal["statement_mixture"]
+    assert mixture["top_n"] == 25
+    assert mixture["share_timeseries_bucket_seconds"] == 3600
+    assert mixture["window_days"] == 14
+    assert len(mixture["series"]) == 25
+    assert len(mixture["bucket_starts"]) == 24 * 14
+    for entry in mixture["series"]:
+        assert set(entry) == {"queryid", "shares"}
+        assert len(entry["shares"]) == 24 * 14
+    assert mixture["churn_week_over_week"] == pytest.approx(0.4, abs=0.02)
+    assert mixture["share_drift_mean_l1"] > 0
+    assert mixture["set_churn_day_over_day"] > 0
+
+    default = _temporal(pgfr_dsn)["statement_mixture"]
+    assert default["top_n"] == 50
+    assert default["statements_considered"] == 50
+
+
+def test_connection_concurrency_is_sampled_with_an_error_model(pgfr_dsn):
+    # r_pg_stat_activity is synthesized with 8 active backends during
+    # weekday business hours (09:00-17:00 UTC) and 2 otherwise, at 60 fast
+    # ticks per hour.
+    temporal = _temporal(pgfr_dsn)
+    concurrency = temporal["metrics"]["connection_concurrency"]
+    assert concurrency["source"] == "r_pg_stat_activity"
+    assert concurrency["sampling"]["regime"] == "mode_a_sampled"
+    assert 50 <= concurrency["sampling"]["interval_s"] <= 70
+    assert "detection_probability" in concurrency["sampling"]
+    profile = concurrency["seasonal_24x7"]
+    assert 7.0 <= profile[0][12] <= 9.0  # Monday noon
+    assert 1.5 <= profile[0][3] <= 2.5  # Monday 03:00
+    assert 1.5 <= profile[6][12] <= 2.5  # Sunday noon
 
 
 def test_capture_two_sample_delegates_to_pgfr_without_sleeping(pgfr_dsn, tmp_path):
