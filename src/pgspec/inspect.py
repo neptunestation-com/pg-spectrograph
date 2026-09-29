@@ -37,6 +37,31 @@ def render_coverage_table(artifact: dict) -> str:
     return "\n".join(lines)
 
 
+def render_representativity(artifact: dict) -> str | None:
+    """Coverage says how much work was captured; this says whether the
+    captured statements look like the population (issue #7)."""
+    rep = (artifact.get("workload") or {}).get("representativity")
+    if not rep:
+        return None
+    population = rep.get("population") or {}
+    captured = rep.get("captured") or {}
+    tail = rep.get("tail_sample") or {}
+    ratios = rep.get("median_log10_ratio") or {}
+    kl = rep.get("verb_mix_kl_bits") or {}
+
+    def times(feature: str) -> str:
+        value = ratios.get(feature)
+        return f"{10 ** value:.1f}x" if value is not None else "n/a"
+
+    return (
+        f"- workload representativity: {captured.get('statements')} of "
+        f"{population.get('statements')} statements captured systematically plus "
+        f"{tail.get('statements', 0)} sampled from the tail; captured median exec time "
+        f"{times('mean_exec_time')} the population's, blocks/call {times('blks_per_call')}, "
+        f"calls {times('calls')}; verb-mix KL {_fmt(kl.get('calls'), 3)} bits by calls"
+    )
+
+
 def _human_bytes(n: int | None) -> str:
     if n is None:
         return "n/a"
@@ -205,6 +230,15 @@ def render_derived_summary(artifact: dict) -> str:
         f"unused size share={_pct(redundancy.get('unused_size_share'))}"
     )
 
+    fanout = derived.get("fk_fanout") or {}
+    fanout_quantiles = fanout.get("mean_fanout_quantiles") or {}
+    lines.append("\n### FK fanout")
+    lines.append(
+        f"- mean children per parent across FK edges: p50={_fmt(fanout_quantiles.get('p50'), 6)} "
+        f"p90={_fmt(fanout_quantiles.get('p90'), 6)} max={_fmt(fanout_quantiles.get('max'), 6)} "
+        f"over {fanout.get('edges_with_stats')} of {fanout.get('edges_total')} edges with statistics"
+    )
+
     return "\n".join(lines)
 
 
@@ -295,6 +329,11 @@ def render_inspect(artifact: dict) -> str:
         "",
         render_coverage_table(artifact),
         "",
+    ]
+    representativity = render_representativity(artifact)
+    if representativity is not None:
+        lines += [representativity, ""]
+    lines += [
         "## Instance",
         "",
         render_instance_highlights(artifact),

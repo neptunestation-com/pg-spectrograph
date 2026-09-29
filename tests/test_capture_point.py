@@ -6,6 +6,7 @@ import gzip
 import json
 
 from pgspec.capture import capture_point, write_artifact
+from pgspec.validate import validate_artifact
 
 from canary_tokens import CANARY_IDENTIFIERS, CANARY_LITERALS, find_canary_tokens
 
@@ -18,7 +19,7 @@ def test_capture_point_assembles_all_sections(pg16_dsn, tmp_path):
         map_path=str(tmp_path / "spectrum-map.json"),
     )
 
-    assert artifact["signature_version"] == "1.0"
+    assert artifact["signature_version"] == "1.1"
     assert artifact["capture_mode"] == "point"
     assert artifact["extractor"]["name"] == "pgspec"
     for section_name in (
@@ -123,6 +124,25 @@ def test_write_artifact_is_compact(pg16_dsn, tmp_path):
         raw_text = f.read()
     reloaded = json.loads(raw_text)
     assert raw_text == json.dumps(reloaded, sort_keys=True, separators=(",", ":"))
+
+
+def test_capture_point_tail_sample_and_new_fields_validate(pg16_dsn, tmp_path):
+    artifact = capture_point(
+        pg16_dsn,
+        top_k=2,
+        tail_sample=3,
+        salt_file=str(tmp_path / ".pgspec-salt"),
+        map_path=str(tmp_path / "spectrum-map.json"),
+    )
+    workload = artifact["workload"]
+    assert workload["coverage"]["tail_sampled"] == 3
+    assert workload["representativity"]["population"]["statements"] >= 5
+    assert workload["parameter_distributions"]["status"] == "catalog_derived"
+    assert "fk_fanout" in artifact["derived"]
+
+    out_path = tmp_path / "spectrum.json.gz"
+    write_artifact(artifact, str(out_path))
+    assert validate_artifact(str(out_path)) == []
 
 
 def test_capture_point_paranoid_is_recorded_in_column_stats(pg16_dsn, tmp_path):

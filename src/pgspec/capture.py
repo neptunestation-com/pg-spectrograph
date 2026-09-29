@@ -28,7 +28,7 @@ from pgspec.pseudonym import PseudonymMap, load_or_create_salt, write_map_file
 # import Capabilities from it. By the time capture_point() actually runs,
 # this module is already fully loaded, so the same imports succeed fine.
 
-SIGNATURE_VERSION = "1.0"
+SIGNATURE_VERSION = "1.1"
 
 #: Postgres pg_settings unit strings this module knows how to convert to
 #: bytes (only the ones relevant to memory-shaped GUCs like shared_buffers).
@@ -180,6 +180,7 @@ def capture_point(
     map_path: str = "spectrum-map.json",
     pgfr: str = "auto",
     paranoid: bool = False,
+    tail_sample: int = 50,
 ) -> dict:
     """Point-in-time capture (§5): all seven sections plus derived, assembled
     into the top-level artifact shape, plus optional pgfr v2 temporal
@@ -211,9 +212,17 @@ def capture_point(
         )
         indexes_result = capture_indexes(conn, schema_result.identifier_map, salt)
         workload_section = capture_workload(
-            conn, schema_result.identifier_map, top_k=top_k
+            conn,
+            schema_result.identifier_map,
+            top_k=top_k,
+            tail_sample=tail_sample,
+            schema_section=schema_result.section,
+            column_stats_section=column_stats_section,
+            function_map=schema_result.function_map,
         )
-        activity_result = capture_activity(conn, schema_result.identifier_map, salt)
+        activity_result = capture_activity(
+            conn, schema_result.identifier_map, salt, function_map=schema_result.function_map
+        )
 
         temporal_section = None
         capture_mode = "point"
@@ -239,6 +248,7 @@ def capture_point(
         activity_section=activity_result.section,
         shared_buffers_bytes=shared_buffers_bytes,
         workload_coverage=workload_section["completeness"]["coverage"],
+        column_stats_section=column_stats_section,
     )
 
     pseudonym_map_digest = _write_merged_pseudonym_map(
@@ -333,10 +343,18 @@ def capture_two_sample(
     conn = connect(dsn)
     try:
         schema_result = capture_schema(conn, salt)
-        sample_a_activity = capture_activity(conn, schema_result.identifier_map, salt)
+        sample_a_activity = capture_activity(
+            conn, schema_result.identifier_map, salt, function_map=schema_result.function_map
+        )
         sample_a_indexes = capture_indexes(conn, schema_result.identifier_map, salt)
+        # No tail sample in two-sample mode: a random draw per sample would
+        # match nothing between A and B and read as pure eviction churn.
         sample_a_workload = capture_workload(
-            conn, schema_result.identifier_map, top_k=top_k
+            conn,
+            schema_result.identifier_map,
+            top_k=top_k,
+            tail_sample=0,
+            function_map=schema_result.function_map,
         )
     finally:
         conn.close()
@@ -353,9 +371,17 @@ def capture_two_sample(
         )
         sample_b_indexes = capture_indexes(conn, schema_result.identifier_map, salt)
         sample_b_workload = capture_workload(
-            conn, schema_result.identifier_map, top_k=top_k
+            conn,
+            schema_result.identifier_map,
+            top_k=top_k,
+            tail_sample=0,
+            schema_section=schema_result.section,
+            column_stats_section=column_stats_section,
+            function_map=schema_result.function_map,
         )
-        sample_b_activity = capture_activity(conn, schema_result.identifier_map, salt)
+        sample_b_activity = capture_activity(
+            conn, schema_result.identifier_map, salt, function_map=schema_result.function_map
+        )
     finally:
         conn.close()
     sample_b_time = dt.datetime.now(dt.timezone.utc)
@@ -399,6 +425,7 @@ def capture_two_sample(
         activity_section=activity_rates,
         shared_buffers_bytes=shared_buffers_bytes,
         workload_coverage=workload_coverage,
+        column_stats_section=column_stats_section,
     )
 
     pseudonym_map_digest = _write_merged_pseudonym_map(

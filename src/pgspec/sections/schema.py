@@ -9,7 +9,7 @@ value (I1) -- only catalog metadata.
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psycopg
 
@@ -109,6 +109,25 @@ def _extract_fillfactor(reloptions: list[str] | None) -> int | None:
         if opt.startswith(_RELFILLFACTOR_PREFIX):
             return int(opt[len(_RELFILLFACTOR_PREFIX) :])
     return None
+
+
+# Every function in a user schema, overloads collapsed. This is the one
+# pseudonym universe for function names: the query-text rewriter (§7.4) and
+# activity's per-function counters both draw "fn_" pseudonyms from it, so a
+# call in pg_stat_statements and a row in pg_stat_user_functions agree.
+_FUNCTIONS_SQL = """
+    SELECT DISTINCT n.nspname, p.proname
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND n.nspname NOT LIKE 'pg_toast%'
+"""
+
+
+def fetch_functions(conn: psycopg.Connection) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(_FUNCTIONS_SQL)
+        return sorted(f"{schema}.{name}" for schema, name in cur.fetchall())
 
 
 def fetch_tables(conn: psycopg.Connection) -> list[dict]:
@@ -240,6 +259,9 @@ def fetch_partitioning(conn: psycopg.Connection) -> dict[str, dict]:
 class SchemaCapture:
     section: dict
     identifier_map: dict[str, str]
+    #: "schema.function" -> fn_ pseudonym, kept apart from identifier_map
+    #: because a table and a function may legitimately share a name.
+    function_map: dict[str, str] = field(default_factory=dict)
 
 
 def capture_schema(conn: psycopg.Connection, salt: bytes) -> SchemaCapture:
@@ -256,6 +278,7 @@ def capture_schema(conn: psycopg.Connection, salt: bytes) -> SchemaCapture:
     trigger_counts = fetch_trigger_counts(conn)
     fk_edges = fetch_fk_graph(conn)
     partitioning = fetch_partitioning(conn)
+    function_names = fetch_functions(conn)
 
     schema_names = sorted({t["schema"] for t in tables})
     table_names = sorted({fq_table(t["schema"], t["table"]) for t in tables})
@@ -266,6 +289,7 @@ def capture_schema(conn: psycopg.Connection, salt: bytes) -> SchemaCapture:
     schema_pseudonyms = assign_ordinals(schema_names, salt, prefix="s")
     table_pseudonyms = assign_ordinals(table_names, salt, prefix="t")
     column_pseudonyms = assign_ordinals(column_names, salt, prefix="c")
+    function_pseudonyms = assign_ordinals(function_names, salt, prefix="fn")
 
     identifier_map: dict[str, str] = {
         **schema_pseudonyms,
@@ -339,7 +363,12 @@ def capture_schema(conn: psycopg.Connection, salt: bytes) -> SchemaCapture:
         "fk_graph": fk_graph,
         "completeness": build_completeness(
             available=True,
-            coverage={"tables_captured": len(table_entries)},
+            coverage={
+                "tables_captured": len(table_entries),
+                "functions_defined": len(function_names),
+            },
         ),
     }
-    return SchemaCapture(section=section, identifier_map=identifier_map)
+    return SchemaCapture(
+        section=section, identifier_map=identifier_map, function_map=function_pseudonyms
+    )

@@ -77,7 +77,10 @@ class ActivityCapture:
 
 
 def capture_activity(
-    conn: psycopg.Connection, identifier_map: dict[str, str], salt: bytes
+    conn: psycopg.Connection,
+    identifier_map: dict[str, str],
+    salt: bytes,
+    function_map: dict[str, str] | None = None,
 ) -> ActivityCapture:
     database_rows = _fetch_rows(conn, _DATABASE_SQL)
     database = database_rows[0] if database_rows else None
@@ -116,7 +119,17 @@ def capture_activity(
     function_names = sorted(
         {f"{r['schemaname']}.{r['funcname']}" for r in functions_raw}
     )
-    function_pseudonyms = assign_ordinals(function_names, salt, prefix="fn")
+    if function_map is None:
+        function_pseudonyms = assign_ordinals(function_names, salt, prefix="fn")
+    else:
+        # The schema section's pg_proc universe is the shared one (the
+        # query-text rewriter draws from it too), so a call in the workload
+        # and a row here carry the same pseudonym. A function that appeared
+        # between the two reads is skipped rather than given a pseudonym
+        # from a different universe.
+        function_pseudonyms = {
+            name: function_map[name] for name in function_names if name in function_map
+        }
     functions_out = [
         {
             "pseudonym": function_pseudonyms[f"{r['schemaname']}.{r['funcname']}"],
@@ -125,6 +138,7 @@ def capture_activity(
             "self_time": r["self_time"],
         }
         for r in functions_raw
+        if f"{r['schemaname']}.{r['funcname']}" in function_pseudonyms
     ]
 
     section = {

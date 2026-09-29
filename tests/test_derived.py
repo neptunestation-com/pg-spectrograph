@@ -13,6 +13,7 @@ from pgspec.sections.derived import (
     cache_hit_ratios,
     compute_derived,
     dead_tuple_pressure,
+    fk_fanout,
     fk_graph_summary,
     hot_update_fraction,
     index_redundancy,
@@ -252,6 +253,99 @@ def test_statement_recurrence_handles_missing_inputs():
     assert result["eviction_churn_fraction"] is None
 
 
+def test_statement_metrics_ignore_the_sampled_tail():
+    systematic = [
+        {"verb": "SELECT", "calls": 800, "total_exec_time": 10.0, "shared_blks_read": 1,
+         "temp_blks_read": 0, "temp_blks_written": 0},
+        {"verb": "UPDATE", "calls": 200, "total_exec_time": 100.0, "shared_blks_read": 50,
+         "temp_blks_read": 0, "temp_blks_written": 0},
+    ]
+    tail = [
+        {"verb": "INSERT", "calls": 1, "total_exec_time": 0.1, "shared_blks_read": 1,
+         "temp_blks_read": 5, "temp_blks_written": 5, "sampled_tail": True}
+        for _ in range(10)
+    ]
+    with_tail = _workload(statements=systematic + tail)
+    without = _workload(statements=systematic)
+
+    assert statement_concentration(with_tail) == statement_concentration(without)
+    assert statement_recurrence(with_tail, None) == statement_recurrence(without, None)
+    assert temp_spill(_activity(), with_tail) == temp_spill(_activity(), without)
+    assert read_write_ratio(_activity(), with_tail) == read_write_ratio(_activity(), without)
+
+
+def _fanout_inputs():
+    schema = {
+        "tables": [
+            {"pseudonym": "t_fact", "reltuples": 200000.0},
+            {"pseudonym": "t_dim", "reltuples": 1000.0},
+            {"pseudonym": "t_dim2", "reltuples": 10.0},
+        ],
+        "fk_graph": [
+            {"from": "t_fact", "from_cols": ["c_cust"], "to": "t_dim", "to_cols": ["c_id"]},
+            {"from": "t_fact", "from_cols": ["c_promo"], "to": "t_dim2", "to_cols": ["c_id2"]},
+            {"from": "t_fact", "from_cols": ["c_a", "c_b"], "to": "t_dim", "to_cols": ["c_x", "c_y"]},
+            {"from": "t_fact", "from_cols": ["c_nostats"], "to": "t_dim", "to_cols": ["c_id"]},
+        ],
+    }
+    column_stats = {
+        "columns": [
+            {"pseudonym": "c_cust", "n_distinct": -0.005, "null_frac": 0.0,
+             "most_common_freqs": [0.0016, 0.0015], "skew_gini": 0.006},
+            {"pseudonym": "c_promo", "n_distinct": 10, "null_frac": 0.3,
+             "most_common_freqs": [0.08, 0.07], "skew_gini": 0.1},
+            {"pseudonym": "c_a", "n_distinct": 50, "null_frac": 0.0,
+             "most_common_freqs": None, "skew_gini": None},
+            {"pseudonym": "c_b", "n_distinct": 400, "null_frac": 0.0,
+             "most_common_freqs": None, "skew_gini": None},
+        ]
+    }
+    return schema, column_stats
+
+
+def test_fk_fanout_per_edge_from_existing_sections():
+    schema, column_stats = _fanout_inputs()
+    result = fk_fanout(schema, column_stats)
+    edges = {(e["from"], e["to"], tuple(e["from_cols"])): e for e in result["edges"]}
+
+    cust = edges[("t_fact", "t_dim", ("c_cust",))]
+    # n_distinct -0.005 of 200,000 rows = 1,000 distinct parents.
+    assert cust["mean_fanout"] == pytest.approx(200.0)
+    assert cust["max_fanout_est"] == pytest.approx(0.0016 * 200000)
+    assert cust["null_fraction"] == 0.0
+    assert cust["skew_gini"] == 0.006
+    assert cust["composite"] is False
+
+    promo = edges[("t_fact", "t_dim2", ("c_promo",))]
+    # 70% of 200,000 rows spread over 10 parents.
+    assert promo["mean_fanout"] == pytest.approx(14000.0)
+    assert promo["null_fraction"] == pytest.approx(0.3)
+
+    composite = edges[("t_fact", "t_dim", ("c_a", "c_b"))]
+    # Approximated by the most selective column (400 distinct), and flagged.
+    assert composite["composite"] is True
+    assert composite["mean_fanout"] == pytest.approx(500.0)
+    assert composite["max_fanout_est"] is None
+
+    nostats = edges[("t_fact", "t_dim", ("c_nostats",))]
+    assert nostats["mean_fanout"] is None
+
+    assert result["edges_total"] == 4
+    assert result["edges_with_stats"] == 3
+    assert result["mean_fanout_quantiles"]["max"] == pytest.approx(14000.0)
+    assert result["mean_fanout_quantiles"]["p50"] == pytest.approx(500.0)
+
+
+def test_fk_fanout_handles_no_edges():
+    result = fk_fanout({"tables": [], "fk_graph": []}, {"columns": []})
+    assert result == {
+        "edges": [],
+        "edges_total": 0,
+        "edges_with_stats": 0,
+        "mean_fanout_quantiles": None,
+    }
+
+
 def test_fk_graph_summary_counts_and_max_fan_in():
     result = fk_graph_summary(_schema())
     assert result["node_count"] == 2
@@ -320,6 +414,7 @@ def test_compute_derived_assembles_everything():
     assert "statement_concentration" in result
     assert "statement_recurrence" in result
     assert "fk_graph_summary" in result
+    assert "fk_fanout" in result
     assert "table_size_distribution" in result
     assert "dead_tuple_pressure" in result
     assert "index_redundancy" in result

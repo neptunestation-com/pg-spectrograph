@@ -40,7 +40,21 @@ def _artifact(**overrides):
             "completeness": _ok_completeness(),
         },
         "indexes": {"completeness": _ok_completeness()},
-        "workload": {"completeness": _ok_completeness()},
+        "workload": {
+            "completeness": _ok_completeness(),
+            "representativity": {
+                "population": {"statements": 1554, "quantiles": {}, "verb_mix": {}},
+                "captured": {"statements": 132, "quantiles": {}, "verb_mix": {}},
+                "tail_sample": {"statements": 50, "quantiles": {}},
+                "median_log10_ratio": {
+                    "mean_exec_time": 1.565,
+                    "calls": 0.0,
+                    "rows_per_call": 0.155,
+                    "blks_per_call": 1.7,
+                },
+                "verb_mix_kl_bits": {"calls": 0.012, "exec_time": 0.001},
+            },
+        },
         "activity": {"completeness": _ok_completeness()},
         "derived": {
             "read_write_ratio": {
@@ -85,6 +99,12 @@ def _artifact(**overrides):
             },
             "dead_tuple_pressure": {"max_ratio": 0.3, "tables_over_threshold": 1},
             "index_redundancy": {"unused_count": 2, "unused_size_share": 0.25},
+            "fk_fanout": {
+                "edges": [],
+                "edges_total": 6,
+                "edges_with_stats": 6,
+                "mean_fanout_quantiles": {"p50": 548.0, "p90": 10000.0, "max": 14033.0},
+            },
         },
         "temporal": None,
         "pseudonym_map_digest": "sha256:abc",
@@ -164,6 +184,20 @@ def test_render_temporal_summary_covers_mixture_and_maintenance():
     assert "week-over-week" in text and "40.0%" in text
     assert "autovacuum" in text and "checkpoint interval" in text and "sawtooth" in text
     assert text.index("completeness (fast tier)") < text.index("statement mixture")
+
+
+def test_render_coverage_states_workload_representativity():
+    report = render_inspect(_artifact())
+    coverage_block = report[report.index("## Coverage") : report.index("## Instance")]
+    assert "representativity" in coverage_block
+    assert "132 of 1554" in coverage_block and "50 sampled from the tail" in coverage_block
+    assert "36.7x" in coverage_block
+
+
+def test_render_derived_summary_includes_fk_fanout():
+    text = render_derived_summary(_artifact())
+    assert "### FK fanout" in text
+    assert "p50=548" in text and "max=14033" in text and "6 edges" in text
 
 
 def test_render_derived_summary_reads_recurrence_against_cache_locality():

@@ -20,6 +20,7 @@ def test_capture_defaults():
     assert args.salt_file == ".pgspec-salt"
     assert args.pgfr == "auto"
     assert args.paranoid is False
+    assert args.tail_sample == 50
 
 
 def test_capture_overrides():
@@ -42,6 +43,8 @@ def test_capture_overrides():
             "--pgfr",
             "require",
             "--paranoid",
+            "--tail-sample",
+            "0",
         ]
     )
     assert args.mode == "two-sample"
@@ -52,6 +55,7 @@ def test_capture_overrides():
     assert args.salt_file == "salt.bin"
     assert args.pgfr == "require"
     assert args.paranoid is True
+    assert args.tail_sample == 0
 
 
 def test_validate_requires_artifact_positional():

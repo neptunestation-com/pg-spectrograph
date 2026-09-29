@@ -195,6 +195,25 @@ def test_rewrite_query_text_keeps_pg_catalog_function_verbatim():
     assert "count" in text
 
 
+def test_rewrite_query_text_pseudonymizes_user_functions_qualified_or_not():
+    # The canary version matrix caught a schema-qualified call leaking its
+    # real name; both spellings must resolve through function_map, and
+    # builtins must stay verbatim.
+    function_map = {"public.xq_calculate_bonus": "fn_0000", "xq_calculate_bonus": "fn_0000"}
+    text, unparsed = rewrite_query_text(
+        "SELECT public.xq_calculate_bonus(100), xq_calculate_bonus(salary), now(), "
+        "pg_catalog.count(*) FROM emp",
+        {"emp": "t_0000", "salary": "c_0000"},
+        function_map=function_map,
+    )
+    assert unparsed is False
+    assert "xq_calculate_bonus" not in text
+    assert text.count("fn_0000(") == 2
+    assert "now()" in text
+    assert "count(*)" in text
+    assert "salary" not in text and "emp" not in text
+
+
 def test_rewrite_query_text_strips_comments():
     sql = "SELECT 1 /* secret_customer_name leak */"
     text, unparsed = rewrite_query_text(sql, {})

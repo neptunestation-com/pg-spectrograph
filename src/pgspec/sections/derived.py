@@ -17,6 +17,28 @@ import math
 import statistics
 
 
+def _systematic(workload_section: dict) -> list[dict]:
+    """The statements the top-K lenses selected. The uniform tail sample
+    (issue #7) exists to describe the tail, not to be counted alongside the
+    systematic capture, so every statement-level derived metric skips it."""
+    return [s for s in (workload_section.get("statements") or []) if not s.get("sampled_tail")]
+
+
+def _quantiles_p50_p90_max(values: list[float]) -> dict | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    last = len(ordered) - 1
+
+    def at(p: float) -> float:
+        position = last * p
+        low = math.floor(position)
+        high = min(low + 1, last)
+        return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+    return {"p50": at(0.5), "p90": at(0.9), "max": ordered[-1]}
+
+
 def read_write_ratio(activity_section: dict, workload_section: dict) -> dict:
     db = activity_section.get("database") or {}
     reads = (db.get("tup_returned") or 0) + (db.get("tup_fetched") or 0)
@@ -27,7 +49,7 @@ def read_write_ratio(activity_section: dict, workload_section: dict) -> dict:
     )
     tup_ratio = reads / writes if writes else None
 
-    statements = workload_section.get("statements") or []
+    statements = _systematic(workload_section)
     read_statements = sum(1 for s in statements if s.get("verb") == "SELECT")
     write_statements = sum(
         1 for s in statements if s.get("verb") in ("INSERT", "UPDATE", "DELETE")
@@ -92,7 +114,7 @@ def temp_spill(activity_section: dict, workload_section: dict) -> dict:
     temp_bytes = db.get("temp_bytes") or 0
     per_xact = temp_bytes / xacts if xacts else None
 
-    statements = workload_section.get("statements") or []
+    statements = _systematic(workload_section)
     with_temp = sum(
         1
         for s in statements
@@ -156,7 +178,7 @@ def _shannon_entropy_and_shares(weights: list[float]) -> dict:
 
 
 def statement_concentration(workload_section: dict) -> dict:
-    statements = workload_section.get("statements") or []
+    statements = _systematic(workload_section)
     exec_time_weights = [s.get("total_exec_time") or 0 for s in statements]
     blks_read_weights = [s.get("shared_blks_read") or 0 for s in statements]
     return {
@@ -175,7 +197,7 @@ def statement_recurrence(workload_section: dict, workload_coverage: dict | None 
     two-sample eviction churn qualify the number, since a pg_stat_statements
     that keeps evicting entries understates recurrence.
     """
-    statements = workload_section.get("statements") or []
+    statements = _systematic(workload_section)
     coverage = workload_coverage or {}
     evicted = coverage.get("evicted_queryids_count")
     captured = coverage.get("statements_captured")
@@ -236,6 +258,67 @@ def fk_graph_summary(schema_section: dict) -> dict:
         "max_fan_out": max(fan_out.values()) if fan_out else 0,
         "fan_in_median": statistics.median(in_degrees) if in_degrees else None,
         "connected_components": components,
+    }
+
+
+def _abs_distinct(n_distinct, reltuples: float) -> float | None:
+    if n_distinct is None:
+        return None
+    n_distinct = float(n_distinct)
+    if n_distinct < 0:
+        return -n_distinct * reltuples if reltuples else None
+    return n_distinct or None
+
+
+def fk_fanout(schema_section: dict, column_stats_section: dict | None) -> dict:
+    """Per-edge FK fanout (issue #7, after PrivBench's PrivFanout), from
+    sections the artifact already has: children per parent as the child
+    table's live rows over the FK column's distinct count, the largest
+    parent's estimated fanout from the top MCV frequency, the optional-FK
+    share from null_frac, and the column's skew. A composite FK is
+    approximated by its most selective column and flagged. Fanout
+    conditioned on parent attributes would need row reads (I3) and is out
+    of scope by design."""
+    tables = {t["pseudonym"]: t for t in schema_section.get("tables") or []}
+    columns = {c["pseudonym"]: c for c in (column_stats_section or {}).get("columns") or []}
+    edges = []
+    means = []
+    for edge in schema_section.get("fk_graph") or []:
+        reltuples = float(tables.get(edge["from"], {}).get("reltuples") or 0)
+        composite = len(edge["from_cols"]) > 1
+        entry = {
+            "from": edge["from"],
+            "to": edge["to"],
+            "from_cols": list(edge["from_cols"]),
+            "composite": composite,
+            "mean_fanout": None,
+            "max_fanout_est": None,
+            "null_fraction": None,
+            "skew_gini": None,
+        }
+        candidates = []
+        for column in edge["from_cols"]:
+            stats = columns.get(column)
+            abs_distinct = _abs_distinct(stats.get("n_distinct"), reltuples) if stats else None
+            if abs_distinct:
+                candidates.append((abs_distinct, column))
+        if candidates and reltuples > 0:
+            abs_distinct, column = max(candidates)
+            stats = columns[column]
+            null_frac = float(stats.get("null_frac") or 0)
+            freqs = stats.get("most_common_freqs") or []
+            entry["mean_fanout"] = reltuples * (1 - null_frac) / abs_distinct
+            entry["null_fraction"] = null_frac
+            if not composite:
+                entry["max_fanout_est"] = max(freqs) * reltuples if freqs else None
+                entry["skew_gini"] = stats.get("skew_gini")
+            means.append(entry["mean_fanout"])
+        edges.append(entry)
+    return {
+        "edges": edges,
+        "edges_total": len(edges),
+        "edges_with_stats": len(means),
+        "mean_fanout_quantiles": _quantiles_p50_p90_max(means),
     }
 
 
@@ -301,6 +384,7 @@ def compute_derived(
     activity_section: dict,
     shared_buffers_bytes: int | None = None,
     workload_coverage: dict | None = None,
+    column_stats_section: dict | None = None,
 ) -> dict:
     """Assemble the full derived section (§6.7) from already-captured
     sections. No database access; every value here is a pure function of
@@ -319,6 +403,7 @@ def compute_derived(
         "statement_concentration": statement_concentration(workload_section),
         "statement_recurrence": statement_recurrence(workload_section, workload_coverage),
         "fk_graph_summary": fk_graph_summary(schema_section),
+        "fk_fanout": fk_fanout(schema_section, column_stats_section),
         "table_size_distribution": table_size_distribution(schema_section),
         "dead_tuple_pressure": dead_tuple_pressure(activity_section),
         "index_redundancy": index_redundancy(indexes_section),

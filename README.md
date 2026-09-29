@@ -33,9 +33,9 @@ completeness metadata (so a consumer can tell "this database is small" from
 | `schema` | Tables, columns, partitioning, the foreign-key graph |
 | `column_stats` | Per-column null fraction, width, distinctness, correlation, MCV frequencies, histogram shape, extended (cross-column) statistics |
 | `indexes` | Access method, key columns, uniqueness, size, scan counts, partial/expression-index structure |
-| `workload` | Top statements from `pg_stat_statements` (by execution time, call count, WAL bytes, and physical block reads), pseudonymized query text, verb/join/aggregate shape |
+| `workload` | Top statements from `pg_stat_statements` (by execution time, call count, WAL bytes, and physical block reads) plus a uniform random sample of the tail, pseudonymized query text, verb/join/aggregate shape, per-predicate selectivity estimates derived from catalog statistics, and a representativity record comparing the captured statements' feature distributions with the whole population's |
 | `activity` | Database, background-writer, WAL, and I/O counters; per-table and per-function activity |
-| `derived` | Read/write ratio, HOT-update fraction, cache hit ratios, statement concentration, FK-graph summary, table-size distribution, dead-tuple pressure, index redundancy, and more, computed from the sections above |
+| `derived` | Read/write ratio, HOT-update fraction, cache hit ratios, statement concentration and recurrence, FK-graph summary and per-edge FK fanout, table-size distribution, dead-tuple pressure, index redundancy, and more, computed from the sections above |
 
 Two capture modes sharpen the above:
 
@@ -93,6 +93,13 @@ Two capture modes sharpen the above:
   `frozen/p413-zheng.pdf`). Below 10 rows, most-common-value frequencies
   are rounded up to the nearest 10%; at 3 rows or fewer they are dropped,
   along with the skew statistic derived from them.
+- **No query parameter values.** Each captured statement lists its
+  predicates (column pseudonym, operator, whether a `$n` parameter is
+  involved) with a selectivity estimate derived from the referenced
+  column's catalog statistics: `1/n_distinct` and the MCV-weighted
+  expectation for equality shapes, the null fraction for `IS NULL`. Range
+  and pattern predicates are marked as needing values rather than
+  estimated.
 - **The pseudonym map never leaves your machine.** `pgspec capture` writes it
   to a separate local file (`spectrum-map.json`, mode `0600`); the artifact
   itself carries only a `sha256` digest of that file, never the mapping.
@@ -147,6 +154,7 @@ completeness metadata, never a hard failure).
 pgspec capture DSN [--mode point|two-sample] [--interval 900]
                [--top-k 500] [--out spectrum.json.gz] [--map spectrum-map.json]
                [--salt-file .pgspec-salt] [--pgfr auto|off|require] [--paranoid]
+               [--tail-sample 50]
 pgspec validate spectrum.json.gz
 pgspec inspect  spectrum.json.gz
 pgspec deref    spectrum.json.gz --map spectrum-map.json
