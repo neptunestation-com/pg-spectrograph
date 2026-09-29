@@ -161,6 +161,20 @@ def render_derived_summary(artifact: dict) -> str:
         f"top1={_pct(blks_read.get('top1_share'))}, top10={_pct(blks_read.get('top10_share'))}"
     )
 
+    recurrence = derived.get("statement_recurrence") or {}
+    calls = recurrence.get("calls") or {}
+    lines.append("\n### Statement recurrence")
+    lines.append(
+        f"- by calls: entropy={_fmt(calls.get('entropy_bits'))} bits, "
+        f"top1={_pct(calls.get('top1_share'))}, top10={_pct(calls.get('top10_share'))} "
+        "(read against the cache hit ratio above: heavy repetition with low "
+        "locality means invalidation churn)"
+    )
+    lines.append(
+        f"- pg_stat_statements deallocations: {recurrence.get('dealloc_count')}, "
+        f"two-sample eviction churn: {_pct(recurrence.get('eviction_churn_fraction'))}"
+    )
+
     fk = derived.get("fk_graph_summary") or {}
     lines.append("\n### FK graph")
     lines.append(

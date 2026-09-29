@@ -206,11 +206,19 @@ def text_width_transform(avg_width: float | None) -> dict:
     return {"avg_width": avg_width}
 
 
+#: Small-table disclosure thresholds (issue #2 finding 1): under
+#: SMALL_TABLE_MIN_ROWS frequencies are coarsened; at or under
+#: SMALL_TABLE_FLOOR_ROWS they, and the skew statistic derived from them,
+#: are dropped (the issue's own example is a 3-row table).
+SMALL_TABLE_MIN_ROWS = 10
+SMALL_TABLE_FLOOR_ROWS = 3
+
+
 def suppress_small_table_stats(
     most_common_freqs: list[float] | None,
     reltuples: float | None,
-    min_rows: int = 10,
-    floor_rows: int = 3,
+    min_rows: int = SMALL_TABLE_MIN_ROWS,
+    floor_rows: int = SMALL_TABLE_FLOOR_ROWS,
     bucket: float = 0.1,
 ) -> list[float] | None:
     """Low-reltuples disclosure suppression (issue #2 finding 1): exact MCV
@@ -218,11 +226,11 @@ def suppress_small_table_stats(
     values present (e.g. a 3-row table's exact 33/33/33% split). Below
     min_rows, frequencies are coarsened by rounding up (never down, so the
     transform never understates true concentration) to the nearest bucket;
-    below floor_rows, the MCV list is dropped entirely.
+    at or below floor_rows, the MCV list is dropped entirely.
     """
     if most_common_freqs is None or reltuples is None:
         return most_common_freqs
-    if reltuples < floor_rows:
+    if reltuples <= floor_rows:
         return None
     if reltuples >= min_rows:
         return list(most_common_freqs)

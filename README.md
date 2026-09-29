@@ -78,9 +78,22 @@ Two capture modes sharpen the above:
   temporal spans by order of magnitude in years as well, so a reader can no
   longer combine `captured_at` with a span to infer when a table's history
   began. The policy in effect is recorded as `column_stats.span_precision`.
+- **No exact statistics on tiny tables.** Exact frequencies over a handful
+  of rows are quasi-identifying even with no values present (a 3-row
+  table's 33/33/33% split says a lot), which is the gap PrivBench's
+  differential-privacy mechanism exists to close (VLDB 2024,
+  `frozen/p413-zheng.pdf`). Below 10 rows, most-common-value frequencies
+  are rounded up to the nearest 10%; at 3 rows or fewer they are dropped,
+  along with the skew statistic derived from them.
 - **The pseudonym map never leaves your machine.** `pgspec capture` writes it
   to a separate local file (`spectrum-map.json`, mode `0600`); the artifact
   itself carries only a `sha256` digest of that file, never the mapping.
+
+For contrast with the closest prior art: DIAMetrics (Google, VLDB 2020,
+`frozen/p3285-gruenheid.pdf`) ships a data scrambler that permutes, hashes,
+and adds noise to real values, with an explicitly stated absence of any
+formal privacy guarantee. pgspec's stance is strictly stronger and simpler
+to audit: no value is ever read, so there is nothing to scramble.
 
 ### How to verify this yourself
 

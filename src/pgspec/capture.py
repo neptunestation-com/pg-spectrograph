@@ -238,6 +238,7 @@ def capture_point(
         workload_section=workload_section,
         activity_section=activity_result.section,
         shared_buffers_bytes=shared_buffers_bytes,
+        workload_coverage=workload_section["completeness"]["coverage"],
     )
 
     pseudonym_map_digest = _write_merged_pseudonym_map(
@@ -397,6 +398,7 @@ def capture_two_sample(
         workload_section=workload_rates,
         activity_section=activity_rates,
         shared_buffers_bytes=shared_buffers_bytes,
+        workload_coverage=workload_coverage,
     )
 
     pseudonym_map_digest = _write_merged_pseudonym_map(

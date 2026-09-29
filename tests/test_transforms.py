@@ -148,8 +148,11 @@ def test_suppress_small_table_stats_coarsens_below_threshold():
     assert result == [0.1, 0.2, 0.3]
 
 
-def test_suppress_small_table_stats_drops_entirely_below_floor():
+def test_suppress_small_table_stats_drops_entirely_at_or_below_floor():
     assert suppress_small_table_stats([0.6, 0.3], reltuples=2) is None
+    # Issue #2's own example: a 3-row table's exact 33/33/33% split.
+    assert suppress_small_table_stats([0.34, 0.33, 0.33], reltuples=3) is None
+    assert suppress_small_table_stats([0.5, 0.25], reltuples=4) == [0.5, 0.3]
 
 
 def test_suppress_small_table_stats_passes_through_missing_inputs():

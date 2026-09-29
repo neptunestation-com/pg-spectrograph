@@ -17,6 +17,7 @@ import psycopg
 from pgspec.completeness import build_completeness
 from pgspec.sections.schema import fetch_columns, fetch_tables, fq_column, fq_table
 from pgspec.transforms import (
+    SMALL_TABLE_FLOOR_ROWS,
     TypeClass,
     classify_type,
     mcv_skew_gini,
@@ -183,10 +184,17 @@ def capture_column_stats(
         type_class = classify_type(type_name)
         reltuples = reltuples_by_fq_table.get(fq_tbl)
 
-        suppressed_freqs = suppress_small_table_stats(
-            row["most_common_freqs"], reltuples
+        suppressed_freqs = suppress_small_table_stats(row["most_common_freqs"], reltuples)
+        suppressed_elem_freqs = suppress_small_table_stats(
+            row["most_common_elem_freqs"], reltuples
         )
-        skew = mcv_skew_gini(row["most_common_freqs"], row["n_distinct"], reltuples)
+        # The skew statistic describes the same frequency distribution;
+        # below the small-table floor it would hand back the split the
+        # suppression just removed, so it is withheld along with it.
+        if reltuples is not None and reltuples <= SMALL_TABLE_FLOOR_ROWS:
+            skew = None
+        else:
+            skew = mcv_skew_gini(suppressed_freqs, row["n_distinct"], reltuples)
 
         histogram = None
         if type_class in (TypeClass.TEMPORAL, TypeClass.NUMERIC) and row[
@@ -207,9 +215,7 @@ def capture_column_stats(
                 "n_distinct": row["n_distinct"],
                 "correlation": row["correlation"],
                 "most_common_freqs": project_mcv_freqs(suppressed_freqs),
-                "most_common_elem_freqs": project_mcv_freqs(
-                    row["most_common_elem_freqs"]
-                ),
+                "most_common_elem_freqs": project_mcv_freqs(suppressed_elem_freqs),
                 "elem_count_histogram": row["elem_count_histogram"],
                 "skew_gini": skew,
                 "attstattarget": stattarget_by_fq_column.get(fq_col),

@@ -19,6 +19,7 @@ from pgspec.sections.derived import (
     index_scan_share,
     read_write_ratio,
     statement_concentration,
+    statement_recurrence,
     table_size_distribution,
     temp_spill,
     wal_metrics,
@@ -209,6 +210,48 @@ def test_statement_concentration_handles_empty_workload():
     assert result["blks_read"]["entropy_bits"] is None
 
 
+def _recurrent_workload():
+    # Redset's shape: one hot statement accounts for 80% of all calls.
+    return _workload(
+        statements=[
+            {"calls": 800, "total_exec_time": 10.0, "shared_blks_read": 1},
+            {"calls": 100, "total_exec_time": 100.0, "shared_blks_read": 50},
+            {"calls": 100, "total_exec_time": 100.0, "shared_blks_read": 50},
+        ]
+    )
+
+
+def test_statement_recurrence_calls_lens_point_mode():
+    coverage = {"statements_captured": 3, "statements_tracked": 3, "dealloc_count": 12}
+    result = statement_recurrence(_recurrent_workload(), coverage)
+    expected_entropy = -sum(p * math.log2(p) for p in (0.8, 0.1, 0.1))
+    assert result["calls"]["entropy_bits"] == pytest.approx(expected_entropy)
+    assert result["calls"]["top1_share"] == pytest.approx(0.8)
+    assert result["calls"]["top10_share"] == pytest.approx(1.0)
+    assert result["dealloc_count"] == 12
+    # Point mode has no second sample, so churn is unknown, not zero.
+    assert result["eviction_churn_fraction"] is None
+
+
+def test_statement_recurrence_eviction_churn_in_two_sample_mode():
+    coverage = {
+        "statements_captured": 3,
+        "dealloc_count": 12,
+        "evicted_queryids_count": 1,
+        "new_queryids_count": 2,
+    }
+    result = statement_recurrence(_recurrent_workload(), coverage)
+    # One of the four statements seen across both samples was evicted.
+    assert result["eviction_churn_fraction"] == pytest.approx(1 / 4)
+
+
+def test_statement_recurrence_handles_missing_inputs():
+    result = statement_recurrence(_workload(statements=[]), None)
+    assert result["calls"]["entropy_bits"] is None
+    assert result["dealloc_count"] is None
+    assert result["eviction_churn_fraction"] is None
+
+
 def test_fk_graph_summary_counts_and_max_fan_in():
     result = fk_graph_summary(_schema())
     assert result["node_count"] == 2
@@ -275,6 +318,7 @@ def test_compute_derived_assembles_everything():
     assert "temp_spill" in result
     assert "cache_hit_ratios" in result
     assert "statement_concentration" in result
+    assert "statement_recurrence" in result
     assert "fk_graph_summary" in result
     assert "table_size_distribution" in result
     assert "dead_tuple_pressure" in result

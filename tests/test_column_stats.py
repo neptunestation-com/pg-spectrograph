@@ -112,6 +112,9 @@ def test_column_stats_suppresses_tiny_table_mcv(pg16_dsn):
     ]
     col = _column_by_pseudonym(column_stats["columns"], salary_pseudonym)
     assert col["most_common_freqs"] is None
+    # The skew statistic is derived from those same frequencies; emitting it
+    # would hand back the exact split the suppression just removed.
+    assert col["skew_gini"] is None
 
 
 def test_extended_stats_defined_and_pseudonymized(pg16_dsn):
