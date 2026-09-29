@@ -52,9 +52,17 @@ Two capture modes sharpen the above:
   with an inferred cadence (`weekdays`, `daily`, `weekly`, ...), UTC phase
   hour, duration, and magnitude over a robust baseline; and window
   completeness taken straight from `pgfr_analyze.coverage()` and
-  `coverage_gaps()`. It also skips the two-sample sleep entirely, since
-  pgfr's history already supplies rates. `--pgfr off` never probes for it;
-  `--pgfr require` fails the capture if it isn't available.
+  `coverage_gaps()`. From pgfr's per-relation history it adds, aggregated
+  to quantiles across tables so no table is identifiable: dead-tuple
+  generation rate and autovacuum cadence (via `rollup_deltas()` over the
+  daily rollups), dead-tuple sawtooth amplitude, and checkpoint spacing;
+  plus a queryid-only statement-mixture time series with drift and churn
+  (the raw query text column is never selected), and a connection
+  concurrency profile from pgfr's sampled `pg_stat_activity` rollup that
+  carries its sampling regime explicitly. It also skips the two-sample
+  sleep entirely, since pgfr's history already supplies rates. `--pgfr off`
+  never probes for it; `--pgfr require` fails the capture if it isn't
+  available.
 
 ## What is provably not captured
 

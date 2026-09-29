@@ -9,17 +9,23 @@ fixture, into a database named after the fixture plus a hash of its content, so
 an edited fixture reloads and a stale one is left behind; see
 `tests/test_scenario_fixtures.py`.
 
-`f_pgfr.sql` (Milestone 13) is the seventh and different in kind: not a
-scenario database but a synthesized 7-day pg_flight_recorder v2 history,
-loaded once by `conftest.py`'s `pgfr_dsn` into the pg_cron-enabled container
-from `tests/docker/docker-compose.pgfr.yml` after `pgfr_record` and
-`pgfr_analyze` are installed. It writes collector-shaped rows straight into
-pgfr's archive tables (`a_pg_stat_wal` with a 12x weekday 13:00-13:30 UTC batch
-on a ~100 kB/s baseline, `a_pg_stat_database` with smooth counters) and
-`ledger_runs` (one fast-tier run per minute with a 2-hour hole), creating the
-past partitions pgfr's create-ahead maintenance never made. See
-`tests/test_temporal_pgfr_live.py`; the detector is also unit-tested against
-synthetic bucketed series in `tests/test_temporal_pgfr.py`.
+`f_pgfr.sql` (Milestones 13 and 14) is the seventh and different in kind: not
+a scenario database but a synthesized pg_flight_recorder v2 history, loaded
+by `conftest.py`'s `pgfr_dsn` into the pg_cron-enabled container from
+`tests/docker/docker-compose.pgfr.yml` after `pgfr_record` and `pgfr_analyze`
+are installed, and reloaded whenever the file's content digest (recorded as
+the database comment) changes. It writes collector-shaped rows straight into
+pgfr's archive tables: 7 days of Group A (`a_pg_stat_wal` with a 12x weekday
+13:00-13:30 UTC batch on a ~100 kB/s baseline, `a_pg_stat_database`,
+`a_pg_stat_bgwriter`), 28 days of `a_pg_stat_all_tables` for 12 synthetic
+tables with a dead-tuple sawtooth and periodic autovacuums, 14 days of
+`a_pg_stat_statements` for 25 synthetic statements with a scripted mixture
+shift one week in, 28 days of the hourly `r_pg_stat_activity` rollup, and
+`ledger_runs` for the fast and medium tiers with one hole each. It creates the
+past partitions pgfr's create-ahead maintenance never made, then calls
+`pgfr_record.run_tier('medium')` so pgfr's own collector closes the daily
+Group B rollups from those raw rows. See `tests/test_temporal_pgfr_live.py`;
+the pure helpers are unit-tested in `tests/test_temporal_pgfr.py`.
 
 The minimal canary-literal fixture (Milestone 3) lives separately, as
 `tests/docker/canary_fixture.sql` (mounted into every matrix container

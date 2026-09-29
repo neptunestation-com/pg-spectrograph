@@ -115,7 +115,17 @@ def _temporal():
                 "source_view": "pg_stat_wal",
             }
         },
-        "statement_mixture": "unavailable_in_v1",
+        "statement_mixture": {
+            "top_n": 50,
+            "statements_considered": 25,
+            "window_days": 14,
+            "share_timeseries_bucket_seconds": 3600,
+            "bucket_starts": [],
+            "series": [],
+            "share_drift_mean_l1": 0.012,
+            "set_churn_day_over_day": 0.05,
+            "churn_week_over_week": 0.4,
+        },
         "events": [
             {
                 "kind": "batch_spike",
@@ -131,9 +141,29 @@ def _temporal():
                 "evidence": ["wal_bytes_rate"],
             }
         ],
-        "maintenance": "unavailable_in_v1",
+        "maintenance": {
+            "window_days": 28,
+            "autovacuum_events_per_day_by_table_quantiles": {
+                "p50": 1.9, "p95": 3.2, "p99": 3.4, "max": 3.4, "n": 12,
+            },
+            "checkpoint_interval_quantiles": {
+                "interval_s": {"p50": 300.0, "p95": 300.0, "p99": 300.0, "max": 300.0, "n": 168},
+                "timed_fraction": 0.98,
+            },
+            "dead_tuple_sawtooth_amplitude_quantiles": {
+                "p50": 0.015, "p95": 0.026, "p99": 0.027, "max": 0.027, "n": 12,
+            },
+        },
         "completeness": _ok_completeness(),
     }
+
+
+def test_render_temporal_summary_covers_mixture_and_maintenance():
+    text = render_temporal_summary(_artifact(temporal=_temporal()))
+    assert "statement mixture" in text
+    assert "week-over-week" in text and "40.0%" in text
+    assert "autovacuum" in text and "checkpoint interval" in text and "sawtooth" in text
+    assert text.index("completeness (fast tier)") < text.index("statement mixture")
 
 
 def test_render_derived_summary_reads_recurrence_against_cache_locality():

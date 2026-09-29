@@ -283,15 +283,20 @@ def pgfr_dsn() -> str:
         except subprocess.CalledProcessError as exc:
             pytest.fail(f"installing pgfr failed: {exc.stderr}")
 
+    # The fixture records its own content digest as the database comment
+    # (a table would be captured by pgfr as a user relation), so an edited
+    # fixture reloads and an unchanged one is skipped.
+    fixture_path = FIXTURES_DIR / "f_pgfr.sql"
+    digest = "pgspec-fixture:" + hashlib.sha256(fixture_path.read_bytes()).hexdigest()[:16]
     with psycopg.connect(PGFR_DSN, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT count(*) FROM pgfr_record.a_pg_stat_wal "
-            "WHERE captured_at < now() - interval '5 days'"
+            "SELECT shobj_description(oid, 'pg_database') FROM pg_database "
+            "WHERE datname = current_database()"
         )
-        history_loaded = cur.fetchone()[0] > 0
-    if not history_loaded:
+        loaded = cur.fetchone()[0]
+    if loaded != digest:
         try:
-            _psql(PGFR_DSN, "-f", str(FIXTURES_DIR / "f_pgfr.sql"))
+            _psql(PGFR_DSN, "-v", f"digest={digest}", "-f", str(fixture_path))
         except subprocess.CalledProcessError as exc:
             pytest.fail(f"loading f_pgfr history failed: {exc.stderr}")
     return PGFR_DSN
